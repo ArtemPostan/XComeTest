@@ -12,13 +12,13 @@ public class RelayUI : MonoBehaviour
     [SerializeField] private TextMeshProUGUI joinCodeText;
     [SerializeField] private TMP_InputField joinInput;
     [SerializeField] private Button connectButton;
-    [SerializeField] private GameObject waitingPanel;
+    [SerializeField] private Button hostButton;
+  
 
     private NetworkUtility _netUtil;
 
     private void Awake()
     {
-        // Берём NetworkUtility с того же GameObject
         _netUtil = GetComponent<NetworkUtility>();
         if (_netUtil == null)
         {
@@ -29,56 +29,63 @@ public class RelayUI : MonoBehaviour
 
     private void Start()
     {
-        // Настраиваем кнопку
+        // Настраиваем кнопки
         connectButton.onClick.AddListener(OnConnectClicked);
-        //Скрываем всё изначально
-        //joinCodeText.gameObject.SetActive(false);
-        //joinInput.gameObject.SetActive(false);
-        //connectButton.gameObject.SetActive(false);
-        waitingPanel.SetActive(false);
-        
+        hostButton.onClick.AddListener(OnHostClicked);
+
+        // Изначально скрываем все, кроме кнопок
+        UpdateUI();
     }
 
     private void Update()
     {
+        UpdateUI();
+    }
+
+    private void UpdateUI()
+    {
         var nm = NetworkManager.Singleton;
         if (nm == null) return;
 
-        // Хост: NetworkManager работает и как сервер, и как клиент
+        // Если хост запущен, показываем код и панель ожидания
         if (nm.IsHost)
-        {           
+        {
             string code = _netUtil.JoinCode;
             joinCodeText.text = string.IsNullOrEmpty(code)
                 ? "Генерируем код..."
-                : $"Your join code:\n<size=24><b>{code}</b></size>";
+                : $"Ваш код для подключения:\n<size=24><b>{code}</b></size>";
 
             joinCodeText.gameObject.SetActive(true);
-            waitingPanel.SetActive(true);
-
+           
             joinInput.gameObject.SetActive(false);
             connectButton.gameObject.SetActive(false);
+            hostButton.gameObject.SetActive(false);
             return;
         }
 
-        // Клиент до подключения
+        // Если клиент подключился, скрываем всё, кроме панели ожидания
         if (nm.IsClient)
-        {            
-            joinInput.gameObject.SetActive(true);
-            connectButton.gameObject.SetActive(true);
-
+        {
             joinCodeText.gameObject.SetActive(false);
-            waitingPanel.SetActive(false);
+            joinInput.gameObject.SetActive(false);
+            connectButton.gameObject.SetActive(false);
+            hostButton.gameObject.SetActive(false);
+           
             return;
         }
 
-        //// Клиент после подключения
-        //if (nm.IsConnectedClient)
-        //{
-        //    joinCodeText.gameObject.SetActive(false);
-        //    joinInput.gameObject.SetActive(false);
-        //    connectButton.gameObject.SetActive(false);
-        //    waitingPanel.SetActive(false);
-        //}
+        // Если игра не запущена (начальное состояние), показываем UI для ввода кода
+        joinCodeText.gameObject.SetActive(false);
+        
+        joinInput.gameObject.SetActive(true);
+        connectButton.gameObject.SetActive(true);
+        hostButton.gameObject.SetActive(true);
+    }
+
+    private void OnHostClicked()
+    {
+        Debug.Log("[RelayUI] Host button clicked.");
+        _netUtil.StartHost();
     }
 
     private void OnConnectClicked()
@@ -87,6 +94,6 @@ public class RelayUI : MonoBehaviour
         if (string.IsNullOrEmpty(code))
             return;
         Debug.Log($"[RelayUI] Connect clicked with code: '{code}'");
-        _netUtil.SetJoinCodeAndConnect(code);
+        _netUtil.StartClient(code);
     }
 }

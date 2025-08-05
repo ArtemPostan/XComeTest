@@ -102,6 +102,7 @@ public class TurnManager : NetworkBehaviour
     /// </summary>
     public void RequestEndTurn()
     {
+        Debug.Log("LocalClientId " + NetworkManager.Singleton.LocalClientId + "and CurrentPlayerId " + CurrentPlayerId.Value);
         if (IsServer || NetworkManager.Singleton.LocalClientId == CurrentPlayerId.Value)
             EndTurnServerRpc();
     }

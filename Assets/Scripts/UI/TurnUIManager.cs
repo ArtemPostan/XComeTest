@@ -12,7 +12,6 @@ public class TurnUIManager : MonoBehaviour
     [SerializeField] private TextMeshProUGUI turnInfoText;
     [SerializeField] private Button endTurnButton;
     [SerializeField] private GameObject waitingPanel;
-    [SerializeField] private TextMeshProUGUI waitingPanelText;
 
     [Header("Unit Info")]
     [SerializeField] private TextMeshProUGUI movementRemainingText;
@@ -35,9 +34,7 @@ public class TurnUIManager : MonoBehaviour
         _selectionManager = FindObjectOfType<UnitSelectionManager>();
 
         // Настраиваем панель ожидания
-        waitingPanel.SetActive(true);
-        if (waitingPanelText != null)
-            waitingPanelText.text = "Ожидаем второго игрока";
+        waitingPanel.SetActive(false);      
 
         timerText.text = "--";
         turnInfoText.text = "";

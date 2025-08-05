@@ -17,9 +17,8 @@ public class NetworkUtility : MonoBehaviour
     [Header("Relay Settings")]
     [Tooltip("Сколько удалённых клиентов (помимо хоста)")]
     [SerializeField] private int maxConnections = 1;
-    [Tooltip("Код для подключения (пусто → это хост)")]
-    [SerializeField] private string joinCode;
 
+    private string joinCode;
     private bool _initialized;
 
     private void Awake()
@@ -37,9 +36,8 @@ public class NetworkUtility : MonoBehaviour
         }
     }
 
-    private async void Start()
+    private async Task InitializeUnityServices()
     {
-        // 1) Инициализация Unity Services + аутентификация
         if (!_initialized)
         {
             await UnityServices.InitializeAsync();
@@ -47,68 +45,64 @@ public class NetworkUtility : MonoBehaviour
                 await AuthenticationService.Instance.SignInAnonymouslyAsync();
             _initialized = true;
         }
-
-        // 2) Запускаем Relay-логику
-        await SetupRelayAndStartAsync();
     }
 
-    private async Task SetupRelayAndStartAsync()
+    /// <summary>
+    /// Вызывается из UI-скрипта для запуска игры в режиме хоста.
+    /// </summary>
+    public async void StartHost()
     {
+        await InitializeUnityServices();
+
         var nm = NetworkManager.Singleton;
         var transport = nm.GetComponent<UnityTransport>();
 
-        bool isWebGL = Application.platform == RuntimePlatform.WebGLPlayer;
-
-        string connectionType;
-
-        // ─── ХОСТ ───
-        if (string.IsNullOrWhiteSpace(joinCode))
+        if (nm.IsClient || nm.IsServer)
         {
-            // Хост всегда использует UDP/DTLS.
-            transport.UseWebSockets = false;
-
-            // Создаем аллокацию для хоста
-            var allocation = await RelayService.Instance.CreateAllocationAsync(maxConnections);
-            joinCode = await RelayService.Instance.GetJoinCodeAsync(allocation.AllocationId);
-            Debug.Log($"[NetworkUtility] Relay HOST. JoinCode = {joinCode}");
-
-            connectionType = "dtls"; // Хост использует DTLS (Secure UDP)
-            transport.SetRelayServerData(new RelayServerData(allocation, connectionType));
-
-            Debug.Log($"[NetworkUtility] Host started using UDP with connection type: {connectionType}");
-            nm.StartHost();
-            return;
+            nm.Shutdown();
+            await Task.Delay(100); // Небольшая задержка для завершения Shutdown
         }
 
-        // ─── КЛИЕНТ ───
-        var trimmed = joinCode.Trim();
-        var joinAlloc = await RelayService.Instance.JoinAllocationAsync(trimmed);
-        Debug.Log($"[NetworkUtility] Relay CLIENT joining with code = {trimmed}");
+        var allocation = await RelayService.Instance.CreateAllocationAsync(maxConnections);
+        joinCode = await RelayService.Instance.GetJoinCodeAsync(allocation.AllocationId);
+        Debug.Log($"[NetworkUtility] Relay HOST. JoinCode = {joinCode}");
 
-        // Клиент: если это WebGL, то используем WebSockets, иначе UDP
-        connectionType = isWebGL ? "wss" : "dtls";
-        transport.UseWebSockets = isWebGL; // Устанавливаем свойство транспорта
+        string connectionType = "dtls";
+        transport.UseWebSockets = false;
+        transport.SetRelayServerData(new RelayServerData(allocation, connectionType));
+
+        Debug.Log($"[NetworkUtility] Host started using {connectionType}");
+        nm.StartHost();
+    }
+
+    /// <summary>
+    /// Вызывается из UI-скрипта для запуска игры в режиме клиента.
+    /// </summary>
+    public async void StartClient(string code)
+    {
+        await InitializeUnityServices();
+
+        var nm = NetworkManager.Singleton;
+        var transport = nm.GetComponent<UnityTransport>();
+
+        if (nm.IsClient || nm.IsServer)
+        {
+            nm.Shutdown();
+            await Task.Delay(100);
+        }
+
+        joinCode = code.Trim();
+
+        var joinAlloc = await RelayService.Instance.JoinAllocationAsync(joinCode);
+        Debug.Log($"[NetworkUtility] Relay CLIENT joining with code = {joinCode}");
+
+        string connectionType = "wss";
+        transport.UseWebSockets = true;
 
         transport.SetRelayServerData(new RelayServerData(joinAlloc, connectionType));
 
         Debug.Log($"[NetworkUtility] Client started using {connectionType}");
         nm.StartClient();
-    }
-
-
-    /// <summary>
-    /// Вызывается из UI-кнопки «Connect» в WebGL. Задаёт joinCode и переподключается.
-    /// </summary>
-    public void SetJoinCodeAndConnect(string code)
-    {
-        joinCode = code;
-        var nm = NetworkManager.Singleton;
-        if (nm.IsClient || nm.IsServer)
-        {
-            nm.Shutdown();
-            Debug.Log("[NetworkUtility] Shutdown before reconnect");
-        }
-        _ = SetupRelayAndStartAsync();
     }
 
     /// <summary>
