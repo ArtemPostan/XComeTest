@@ -1374,8 +1374,10 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d44820f7eb99d5d49ac9989e3adec24d, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+  turnManager: {fileID: 1669389586}
   moveSpeed: 25
   edgeTolerance: 25
+  offsetZ: -30
   zoomSpeed: 25
   minZoom: 5
   maxZoom: 100
@@ -2111,6 +2113,9 @@ MonoBehaviour:
     m_PersistentCalls:
       m_Calls: []
   OnTurnEnded:
+    m_PersistentCalls:
+      m_Calls: []
+  OnPlayerUnitTurnStarted:
     m_PersistentCalls:
       m_Calls: []
   CurrentPlayerId:

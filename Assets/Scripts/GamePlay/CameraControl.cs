@@ -1,12 +1,19 @@
+using System.Collections;
 using UnityEngine;
 
 public class CameraControl : MonoBehaviour
 {
+    [Header("Системные зависимости")]
+    [Tooltip("Менеджер ходов для подписки на события")]
+    public TurnManager turnManager;
+
     [Header("Параметры движения")]
     [Tooltip("Скорость движения камеры")]
     [SerializeField] private float moveSpeed = 10f;
     [Tooltip("Отступ от края экрана, при котором начинает двигаться камера")]
     [SerializeField] private float edgeTolerance = 25f;
+    [Tooltip("Отступ камеры по оси Z от юнита при центрировании")]
+    [SerializeField] private float offsetZ = -5f; 
 
     [Header("Параметры масштабирования")]
     [Tooltip("Чувствительность масштабирования (колесико мыши)")]
@@ -32,7 +39,16 @@ public class CameraControl : MonoBehaviour
             return;
         }
 
-        // --- NEW: Calculate game bounds from the specified object ---
+        // --- NEW: Subscribe to the turn manager event ---
+        if (turnManager != null)
+        {
+            turnManager.OnPlayerUnitTurnStarted.AddListener(CenterOnUnit);
+        }
+        else
+        {
+            Debug.LogWarning("TurnManager is not set. Camera will not automatically center on units.");
+        }
+
         if (boundaryObject != null)
         {
             Renderer renderer = boundaryObject.GetComponent<Renderer>();
@@ -134,6 +150,17 @@ public class CameraControl : MonoBehaviour
         Vector3 moveDirection = Vector3.zero;
         Vector2 mousePosition = Input.mousePosition;
 
+        // Проверяем, находится ли курсор в пределах экрана
+        // Unity автоматически ограничивает позицию курсора, но такая проверка делает код более надёжным
+        bool cursorIsInsideScreen = (mousePosition.x >= 0 && mousePosition.x <= Screen.width &&
+                                     mousePosition.y >= 0 && mousePosition.y <= Screen.height);
+
+        if (!cursorIsInsideScreen)
+        {
+            // Если курсор вышел за пределы экрана, не двигаем камеру
+            return;
+        }
+
         // Движение по горизонтали
         if (mousePosition.x < edgeTolerance)
         {
@@ -155,8 +182,11 @@ public class CameraControl : MonoBehaviour
         }
 
         // Нормализуем и перемещаем
-        moveDirection.Normalize();
-        transform.Translate(moveDirection * moveSpeed * Time.deltaTime, Space.World);
+        if (moveDirection != Vector3.zero)
+        {
+            moveDirection.Normalize();
+            transform.Translate(moveDirection * moveSpeed * Time.deltaTime, Space.World);
+        }
     }
 
     /// <summary>
@@ -185,5 +215,29 @@ public class CameraControl : MonoBehaviour
             // Применяем новую позицию
             transform.position = newPosition;
         }
+    }
+    public void CenterOnUnit(Transform unitTransform)
+    {
+        Vector3 targetPosition = unitTransform.position;
+        // Сохраняем текущую Y-координату камеры, чтобы она не менялась при центрировании
+        Vector3 newPosition = new Vector3(targetPosition.x, transform.position.y, targetPosition.z + offsetZ);
+
+        // Плавное перемещение камеры
+        // Используем Vector3.Lerp для создания эффекта плавности
+        StartCoroutine(MoveCameraSmoothly(newPosition, 1.0f)); // 1.0f - это скорость, можно вынести в настройки
+    }
+
+    private IEnumerator MoveCameraSmoothly(Vector3 targetPosition, float duration)
+    {
+        float elapsedTime = 0;
+        Vector3 startingPos = transform.position;
+
+        while (elapsedTime < duration)
+        {
+            transform.position = Vector3.Lerp(startingPos, targetPosition, (elapsedTime / duration));
+            elapsedTime += Time.deltaTime;
+            yield return null;
+        }
+        transform.position = targetPosition; // Убедимся, что камера точно дошла до цели
     }
 }

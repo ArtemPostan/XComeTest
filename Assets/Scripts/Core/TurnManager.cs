@@ -18,12 +18,15 @@ public class TurnManager : NetworkBehaviour
     [Header("Events (UI can subscribe)")]
     public UnityEvent<ulong, int> OnTurnStarted; // (playerId, turnNumber)
     public UnityEvent<ulong, int> OnTurnEnded;   // (playerId, turnNumber)
+    public UnityEvent<Transform> OnPlayerUnitTurnStarted;
 
     public NetworkVariable<ulong> CurrentPlayerId = new NetworkVariable<ulong>();
     public NetworkVariable<int> TurnNumber = new NetworkVariable<int>(1);
 
     private bool _gameStarted;
     private Coroutine _timerCoroutine;
+
+    private UnitNetworkBehaviour _firstUnitOfCurrentPlayer;
 
     public override void OnNetworkSpawn()
     {
@@ -64,8 +67,19 @@ public class TurnManager : NetworkBehaviour
         // Сброс запаса движения и атаки у всех юнитов текущего игрока
         ResetUnitsForPlayer(CurrentPlayerId.Value);
 
-        // Уведомляем клиентов
-        StartTurnClientRpc(CurrentPlayerId.Value, TurnNumber.Value);
+        NetworkObjectReference unitReference = new NetworkObjectReference(); // Создаем пустую ссылку по умолчанию
+
+        // Получаем первый юнит текущего игрока
+        _firstUnitOfCurrentPlayer = GetFirstUnitForPlayer(CurrentPlayerId.Value);
+
+        // Если юнит найден, присваиваем его ссылку
+        if (_firstUnitOfCurrentPlayer != null)
+        {
+            unitReference = _firstUnitOfCurrentPlayer.NetworkObject;
+        }
+
+        // Уведомляем клиентов, передавая созданную ссылку
+        StartTurnClientRpc(CurrentPlayerId.Value, TurnNumber.Value, unitReference);
 
         // Запускаем таймер хода
         if (_timerCoroutine != null) StopCoroutine(_timerCoroutine);
@@ -77,6 +91,9 @@ public class TurnManager : NetworkBehaviour
     /// </summary>
     private void ResetUnitsForPlayer(ulong playerId)
     {
+        // NEW: Variable to hold the first unit's transform to send to the camera
+        Transform firstUnitTransform = null;
+
         foreach (var kvp in NetworkManager.Singleton.SpawnManager.SpawnedObjects)
         {
             var netObj = kvp.Value;
@@ -87,14 +104,37 @@ public class TurnManager : NetworkBehaviour
                 unit.MovementRemaining.Value = unit.moveSpeed;
                 unit.CanAttack.Value = true;
                 Debug.Log($"[TurnManager] Reset unit {netObj.NetworkObjectId} for player {playerId}");
+
+                // NEW: Capture the transform of the first unit
+                if (firstUnitTransform == null)
+                {
+                    firstUnitTransform = netObj.transform;
+                }
             }
+        }
+
+        // NEW: If a unit was found, notify the camera to focus on it
+        if (firstUnitTransform != null)
+        {
+            OnPlayerUnitTurnStarted?.Invoke(firstUnitTransform);
         }
     }
 
-    [ClientRpc]
-    private void StartTurnClientRpc(ulong playerId, int turn)
+    [ClientRpc] 
+    private void StartTurnClientRpc(ulong playerId, int turn, NetworkObjectReference unitReference)
     {
         OnTurnStarted?.Invoke(playerId, turn);
+
+        // Если ссылка на юнит действительна, передаем его Transform в событие
+        if (unitReference.TryGet(out var networkObject))
+        {
+            OnPlayerUnitTurnStarted?.Invoke(networkObject.transform);
+        }
+        else
+        {
+            // Иначе, просто выводим предупреждение
+            Debug.LogWarning("[TurnManager] Юнит для центрирования камеры не найден.");
+        }
     }
 
     /// <summary>
@@ -139,5 +179,18 @@ public class TurnManager : NetworkBehaviour
             yield return null;
         }
         EndTurnServerRpc();
+    }
+
+    public UnitNetworkBehaviour GetFirstUnitForPlayer(ulong playerId)
+    {
+        foreach (var kvp in NetworkManager.Singleton.SpawnManager.SpawnedObjects)
+        {
+            var netObj = kvp.Value;
+            if (netObj.OwnerClientId == playerId)
+            {
+                return netObj.GetComponent<UnitNetworkBehaviour>();
+            }
+        }
+        return null;
     }
 }
