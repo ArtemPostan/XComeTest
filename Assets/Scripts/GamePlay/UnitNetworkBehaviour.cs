@@ -1,122 +1,237 @@
 // Assets/Scripts/Units/UnitNetworkBehaviour.cs
+//
+// Исправления:
+// - CanAttack использует допуск epsilon, чтобы не промахиваться по float.
+// - Добавлен StopMovement(), который мгновенно останавливает юнита (сбрасывает TargetPosition).
+//   Вызывается после успешной атаки, чтобы не было "сдвига" после атаки.
 
-using System.Linq;
 using Unity.Netcode;
 using UnityEngine;
 
 public class UnitNetworkBehaviour : NetworkBehaviour
-{
-    [Header("Stats")]
-    [Tooltip("Максимальное расстояние перемещения за один ход")]
-    public float moveSpeed = 5f;
+{   
+    [field: SerializeField] public float moveSpeed { get; private set; } = 5f;
+    [field: SerializeField] public float AttackRadius { get; private set; } = 3f;
 
-    [Header("Smoothing")]
-    [Tooltip("Скорость сглаживания движения на клиентах")]
-    [SerializeField] private float smoothingSpeed = 8f;
+    [Header("Health")]
+    [SerializeField] private int maxHealth = 100;
+    public int MaxHealth => maxHealth;
 
-    [Header("Selection Visuals")]
-    [SerializeField] private Renderer[] renderers;
-    [SerializeField] private Color highlightColor = Color.yellow;
+    public NetworkVariable<int> Health = new NetworkVariable<int>(
+        100, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
 
-    public NetworkVariable<Vector3> NetPosition = new NetworkVariable<Vector3>();
-    public NetworkVariable<float> MovementRemaining = new NetworkVariable<float>();
-    public NetworkVariable<bool> CanAttack = new NetworkVariable<bool>(true);
+    public NetworkVariable<float> MovementRemaining = new NetworkVariable<float>(
+        0f, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
 
-    private Vector3 _targetPosition;
-    private Color[][] _originalColors;
+    public NetworkVariable<Vector3> TargetPosition = new NetworkVariable<Vector3>(
+        Vector3.zero, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
 
-    public override void OnNetworkSpawn()
+    public NetworkVariable<bool> _canAttack = new NetworkVariable<bool>(
+        true, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+
+    private Renderer[] _renderers;
+    private Color[] _originalColors;
+    [SerializeField] private Color _selectedColor = new Color(0.2f, 0.8f, 1f, 1f);
+
+    private void Awake()
+    {
+        _renderers = GetComponentsInChildren<Renderer>(true);
+        _originalColors = new Color[_renderers.Length];
+        for (int i = 0; i < _renderers.Length; i++)
+        {
+            _originalColors[i] = _renderers[i].material.HasProperty("_Color")
+                ? _renderers[i].material.color
+                : Color.white;
+        }
+    }
+
+    private void Start()
     {
         if (IsServer)
         {
-            NetPosition.Value = transform.position;
-            MovementRemaining.Value = moveSpeed;
-        }
+            if (MovementRemaining.Value <= 0f)
+                MovementRemaining.Value = moveSpeed;
 
-        if (IsClient)
+            TargetPosition.Value = transform.position;
+
+            if (Health.Value <= 0)
+                Health.Value = maxHealth;
+        }
+    }
+
+    public override void OnNetworkSpawn()
+    {
+        base.OnNetworkSpawn();
+
+        if (IsServer)
         {
-            _targetPosition = NetPosition.Value;
-            transform.position = _targetPosition;
-            NetPosition.OnValueChanged += (_, newPos) => _targetPosition = newPos;
-        }
+            TargetPosition.Value = transform.position;
+            if (MovementRemaining.Value <= 0f)
+                MovementRemaining.Value = moveSpeed;
 
-        _originalColors = renderers
-            .Select(r => r.materials.Select(m => m.color).ToArray())
-            .ToArray();
+            if (Health.Value <= 0)
+                Health.Value = maxHealth;
+        }
     }
 
     private void Update()
     {
-        if (IsClient)
+        if (!IsSpawned) return;
+
+        if (TargetPosition.Value != transform.position)
         {
-            transform.position = Vector3.Lerp(
+            transform.position = Vector3.MoveTowards(
                 transform.position,
-                _targetPosition,
-                Time.deltaTime * smoothingSpeed
+                TargetPosition.Value,
+                moveSpeed * Time.deltaTime
             );
         }
     }
 
-    [ServerRpc(RequireOwnership = true)]
-    public void MoveServerRpc(Vector3 target, ServerRpcParams rpcParams = default)
+    // === ДВИЖЕНИЕ ===
+    public void MoveTo(Vector3 position)
     {
-        // Проверяем, чей сейчас ход
-        var sender = rpcParams.Receive.SenderClientId;
-        var tm = FindObjectOfType<TurnManager>();
-        if (tm == null || tm.CurrentPlayerId.Value != sender)
-            return;
+        MoveToServerRpc(position);
+    }
 
-        float left = MovementRemaining.Value;
-        Vector3 currentPos = NetPosition.Value;
-        Vector3 direction = (target - currentPos);
-        float requestedDist = direction.magnitude;
+    [ServerRpc(RequireOwnership = false)]
+    private void MoveToServerRpc(Vector3 requestedPosition, ServerRpcParams rpcParams = default)
+    {
+        bool isLocalPlay = NetworkUtility.Instance?.localPlayMode ?? false;
 
-        if (requestedDist <= 0f || left <= 0f)
-            return;
-
-        Vector3 newPos;
-        float usedDistance;
-        if (requestedDist <= left)
+        if (!isLocalPlay && rpcParams.Receive.SenderClientId != OwnerClientId)
         {
-            // можем дойти до цели
-            newPos = target;
-            usedDistance = requestedDist;
+            Debug.LogWarning($"[Move] Reject from {rpcParams.Receive.SenderClientId}, owner is {OwnerClientId}");
+            return;
+        }
+
+        if (MovementRemaining.Value <= 0f)
+        {
+            Debug.Log($"[Move] No movement points for {name}");
+            return;
+        }
+
+        Vector3 current = transform.position;
+        float distanceToRequested = Vector3.Distance(current, requestedPosition);
+        if (distanceToRequested <= 0.001f)
+            return;
+
+        if (MovementRemaining.Value >= distanceToRequested)
+        {
+            MovementRemaining.Value -= distanceToRequested;
+            TargetPosition.Value = requestedPosition;
         }
         else
         {
-            // идём в направлении, пока не закончится движение
-            newPos = currentPos + direction.normalized * left;
-            usedDistance = left;
+            Vector3 dir = (requestedPosition - current).normalized;
+            Vector3 partial = current + dir * MovementRemaining.Value;
+
+            TargetPosition.Value = partial;
+            MovementRemaining.Value = 0f;
+        }
+    }
+
+    [ServerRpc(RequireOwnership = false)]
+    public void StopMovementServerRpc(ServerRpcParams rpcParams = default)
+    {
+        bool isLocalPlay = NetworkUtility.Instance?.localPlayMode ?? false;
+        if (!isLocalPlay && rpcParams.Receive.SenderClientId != OwnerClientId) return;
+
+        TargetPosition.Value = transform.position;
+    }
+
+    public void StopMovement()
+    {
+        // Клиент просит сервер остановить движение
+        StopMovementServerRpc();
+    }
+
+    // === АТАКА ===
+    public bool CanAttack(UnitNetworkBehaviour targetUnit)
+    {
+        if (targetUnit == null) return false;
+        const float epsilon = 0.05f; // небольшой допуск
+        float distance = Vector3.Distance(transform.position, targetUnit.transform.position);
+        return distance <= (AttackRadius + epsilon);
+    }
+
+    public void AttackTarget(NetworkObject targetNetworkObject, int damage)
+    {
+        AttackServerRpc(targetNetworkObject, damage);
+    }
+
+    [ServerRpc(RequireOwnership = false)]
+    private void AttackServerRpc(NetworkObjectReference targetRef, int damage, ServerRpcParams rpcParams = default)
+    {
+        bool isLocalPlay = NetworkUtility.Instance?.localPlayMode ?? false;
+        if (!isLocalPlay && rpcParams.Receive.SenderClientId != OwnerClientId)
+        {
+            Debug.LogWarning($"[Attack] Reject from {rpcParams.Receive.SenderClientId}, owner is {OwnerClientId}");
+            return;
         }
 
-        NetPosition.Value = newPos;
-        MovementRemaining.Value = Mathf.Max(0f, left - usedDistance);
-
-        Debug.Log($"[Unit {NetworkObjectId}] Moved towards {target}, " +
-                  $"used {usedDistance:F2}, remaining {MovementRemaining.Value:F2}");
-    }
-
-    [ServerRpc(RequireOwnership = true)]
-    public void AttackServerRpc(ulong targetId, ServerRpcParams rpcParams = default)
-    {
-        var sender = rpcParams.Receive.SenderClientId;
-        var tm = FindObjectOfType<TurnManager>();
-        if (tm == null || tm.CurrentPlayerId.Value != sender)
-            return;
-
-        if (!CanAttack.Value) return;
-        if (NetworkManager.Singleton.SpawnManager.SpawnedObjects.TryGetValue(targetId, out var obj))
-            obj.Despawn();
-        CanAttack.Value = false;
-    }
-
-    public void SetSelected(bool selected)
-    {
-        for (int i = 0; i < renderers.Length; i++)
+        if (!_canAttack.Value)
         {
-            var mats = renderers[i].materials;
-            for (int j = 0; j < mats.Length; j++)
-                mats[j].color = selected ? highlightColor : _originalColors[i][j];
+            Debug.Log($"[Attack] {name} cannot attack this turn");
+            return;
+        }
+
+        if (!targetRef.TryGet(out var targetNO))
+        {
+            Debug.LogWarning("[Attack] targetRef invalid");
+            return;
+        }
+
+        var targetUnit = targetNO.GetComponent<UnitNetworkBehaviour>();
+        if (targetUnit == null)
+        {
+            Debug.LogWarning("[Attack] target has no UnitNetworkBehaviour");
+            return;
+        }
+
+        // Проверка радиуса с тем же epsilon, что и в CanAttack
+        const float epsilon = 0.05f;
+        float dist = Vector3.Distance(transform.position, targetUnit.transform.position);
+        if (dist > AttackRadius + epsilon)
+        {
+            Debug.Log($"[Attack] Target out of range: {dist:F2} > {AttackRadius + epsilon:F2}");
+            return;
+        }
+
+        // Урон
+        targetUnit.ApplyDamageServerRpc(damage);
+
+        // Снимаем возможность атаковать до конца хода
+        _canAttack.Value = false;
+
+        // ЖЁСТКО останавливаем движение после атаки
+        TargetPosition.Value = transform.position;
+
+        Debug.Log($"[Attack] {name} hit {targetUnit.name} for {damage}, target HP={targetUnit.Health.Value}");
+    }
+
+    [ServerRpc(RequireOwnership = false)]
+    public void ApplyDamageServerRpc(int damage)
+    {
+        if (!IsServer) return;
+        int newHp = Mathf.Max(0, Health.Value - Mathf.Max(0, damage));
+        Health.Value = newHp;
+
+        if (Health.Value == 0)
+        {
+            // TODO: смерть/деспавн, эффекты
+            // GetComponent<NetworkObject>().Despawn();
+        }
+    }
+
+    // === ВИЗУАЛЬНОЕ ВЫДЕЛЕНИЕ ===
+    public void SetSelected(bool isSelected)
+    {
+        for (int i = 0; i < _renderers.Length; i++)
+        {
+            if (_renderers[i] == null) continue;
+            if (_renderers[i].material.HasProperty("_Color"))
+                _renderers[i].material.color = isSelected ? _selectedColor : _originalColors[i];
         }
     }
 }

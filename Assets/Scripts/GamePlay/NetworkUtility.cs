@@ -18,6 +18,12 @@ public class NetworkUtility : MonoBehaviour
     [Tooltip("Сколько удалённых клиентов (помимо хоста)")]
     [SerializeField] private int maxConnections = 1;
 
+    [Header("Local Play Settings")]
+    [Tooltip("Включить, чтобы играть локально, без сети")]
+    [SerializeField] public bool localPlayMode = false;
+    [SerializeField] private string localIpAddress = "127.0.0.1";
+    [SerializeField] private ushort localPort = 7777;
+
     private string joinCode;
     private bool _initialized;
 
@@ -38,7 +44,8 @@ public class NetworkUtility : MonoBehaviour
 
     private async Task InitializeUnityServices()
     {
-        if (!_initialized)
+        // Only initialize services if not in local play mode
+        if (!_initialized && !localPlayMode)
         {
             await UnityServices.InitializeAsync();
             if (!AuthenticationService.Instance.IsSignedIn)
@@ -52,16 +59,25 @@ public class NetworkUtility : MonoBehaviour
     /// </summary>
     public async void StartHost()
     {
-        await InitializeUnityServices();
-
         var nm = NetworkManager.Singleton;
-        var transport = nm.GetComponent<UnityTransport>();
 
+        // --- Локальный режим ---
+        if (localPlayMode)
+        {
+            StartHostLocal();
+            return;
+        }
+
+        // --- Сетевой режим ---
         if (nm.IsClient || nm.IsServer)
         {
             nm.Shutdown();
-            await Task.Delay(100); // Небольшая задержка для завершения Shutdown
+            await Task.Delay(100);
         }
+
+        await InitializeUnityServices();
+
+        var transport = nm.GetComponent<UnityTransport>();
 
         var allocation = await RelayService.Instance.CreateAllocationAsync(maxConnections);
         joinCode = await RelayService.Instance.GetJoinCodeAsync(allocation.AllocationId);
@@ -76,20 +92,48 @@ public class NetworkUtility : MonoBehaviour
     }
 
     /// <summary>
-    /// Вызывается из UI-скрипта для запуска игры в режиме клиента.
+    /// Специальный метод для запуска хоста в локальном режиме.
     /// </summary>
-    public async void StartClient(string code)
+    public void StartHostLocal()
     {
-        await InitializeUnityServices();
-
         var nm = NetworkManager.Singleton;
         var transport = nm.GetComponent<UnityTransport>();
 
         if (nm.IsClient || nm.IsServer)
         {
             nm.Shutdown();
+        }
+
+        // Очищаем Relay-настройки и устанавливаем локальный адрес
+        transport.SetConnectionData(localIpAddress, localPort);
+
+        Debug.Log("[NetworkUtility] Starting in local play mode. Network features disabled.");
+        nm.StartHost();
+    }
+
+    /// <summary>
+    /// Вызывается из UI-скрипта для запуска игры в режиме клиента.
+    /// </summary>
+    public async void StartClient(string code)
+    {
+        // В локальном режиме клиент не может быть запущен
+        if (localPlayMode)
+        {
+            Debug.LogWarning("[NetworkUtility] Cannot start client in local play mode.");
+            return;
+        }
+
+        var nm = NetworkManager.Singleton;
+
+        if (nm.IsClient || nm.IsServer)
+        {
+            nm.Shutdown();
             await Task.Delay(100);
         }
+
+        await InitializeUnityServices();
+
+        var transport = nm.GetComponent<UnityTransport>();
 
         joinCode = code.Trim();
 

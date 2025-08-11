@@ -16,12 +16,15 @@ public class TurnManager : NetworkBehaviour
     public float TurnDuration => turnDuration;
 
     [Header("Events (UI can subscribe)")]
-    public UnityEvent<ulong, int> OnTurnStarted; // (playerId, turnNumber)
-    public UnityEvent<ulong, int> OnTurnEnded;   // (playerId, turnNumber)
-    public UnityEvent<Transform> OnPlayerUnitTurnStarted;
+    public UnityEvent<ulong, int> OnTurnStarted = new UnityEvent<ulong, int>(); // (playerId, turnNumber)
+    public UnityEvent<ulong, int> OnTurnEnded = new UnityEvent<ulong, int>(); // (playerId, turnNumber)
+    public UnityEvent<Transform> OnPlayerUnitTurnStarted = new UnityEvent<Transform>();
 
-    public NetworkVariable<ulong> CurrentPlayerId = new NetworkVariable<ulong>();
-    public NetworkVariable<int> TurnNumber = new NetworkVariable<int>(1);
+    public NetworkVariable<ulong> CurrentPlayerId = new NetworkVariable<ulong>(
+        0, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+
+    public NetworkVariable<int> TurnNumber = new NetworkVariable<int>(
+        1, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
 
     private bool _gameStarted;
     private Coroutine _timerCoroutine;
@@ -30,17 +33,46 @@ public class TurnManager : NetworkBehaviour
 
     public override void OnNetworkSpawn()
     {
+        base.OnNetworkSpawn();
+
+        bool isLocalPlay = FindObjectOfType<NetworkUtility>()?.localPlayMode ?? false;
+
         if (IsServer)
         {
-            // Ждём второго игрока
-            NetworkManager.Singleton.OnClientConnectedCallback += OnClientConnected;
-            if (NetworkManager.Singleton.ConnectedClientsIds.Count >= 2)
-                StartGame();
+            if (isLocalPlay)
+            {
+                // Локальная игра: не ждём второго клиента
+                StartGameSinglePlayer();
+            }
+            else
+            {
+                NetworkManager.Singleton.OnClientConnectedCallback += OnClientConnected;
+                if (NetworkManager.Singleton.ConnectedClientsIds.Count >= 2)
+                    StartGame();
+            }
         }
 
-        // Подписываем UI на изменения
         CurrentPlayerId.OnValueChanged += (_, pid) => OnTurnStarted?.Invoke(pid, TurnNumber.Value);
         TurnNumber.OnValueChanged += (_, tn) => OnTurnStarted?.Invoke(CurrentPlayerId.Value, tn);
+    }
+
+    private void StartGameSinglePlayer()
+    {
+        _gameStarted = true;
+        var nm = NetworkManager.Singleton;
+        if (nm != null)
+            nm.OnClientConnectedCallback -= OnClientConnected;
+
+        // единственный игрок — хост
+        CurrentPlayerId.Value = NetworkManager.Singleton.LocalClientId;
+        TurnNumber.Value = 1;
+        StartTurn();
+    }
+
+    private void OnDestroy()
+    {
+        if (NetworkManager.Singleton != null)
+            NetworkManager.Singleton.OnClientConnectedCallback -= OnClientConnected;
     }
 
     private void OnClientConnected(ulong clientId)
@@ -56,6 +88,7 @@ public class TurnManager : NetworkBehaviour
         NetworkManager.Singleton.OnClientConnectedCallback -= OnClientConnected;
 
         var clients = NetworkManager.Singleton.ConnectedClientsIds;
+        // Стартуем с первого подключившегося клиента
         CurrentPlayerId.Value = clients[0];
         TurnNumber.Value = 1;
 
@@ -67,21 +100,18 @@ public class TurnManager : NetworkBehaviour
         // Сброс запаса движения и атаки у всех юнитов текущего игрока
         ResetUnitsForPlayer(CurrentPlayerId.Value);
 
-        NetworkObjectReference unitReference = new NetworkObjectReference(); // Создаем пустую ссылку по умолчанию
-
-        // Получаем первый юнит текущего игрока
+        // Готовим ссылку на "первого" юнита текущего игрока (для центрирования камеры)
+        NetworkObjectReference unitReference = new NetworkObjectReference(); // пустая по умолчанию
         _firstUnitOfCurrentPlayer = GetFirstUnitForPlayer(CurrentPlayerId.Value);
-
-        // Если юнит найден, присваиваем его ссылку
         if (_firstUnitOfCurrentPlayer != null)
         {
             unitReference = _firstUnitOfCurrentPlayer.NetworkObject;
         }
 
-        // Уведомляем клиентов, передавая созданную ссылку
+        // Оповещаем клиентов о старте хода, передаём ссылку на юнита для камеры
         StartTurnClientRpc(CurrentPlayerId.Value, TurnNumber.Value, unitReference);
 
-        // Запускаем таймер хода
+        // Запускаем таймер хода на сервере
         if (_timerCoroutine != null) StopCoroutine(_timerCoroutine);
         _timerCoroutine = StartCoroutine(TurnTimer());
     }
@@ -91,21 +121,27 @@ public class TurnManager : NetworkBehaviour
     /// </summary>
     private void ResetUnitsForPlayer(ulong playerId)
     {
-        // NEW: Variable to hold the first unit's transform to send to the camera
+        // Для мгновенного центрирования камеры на сервере (опционально)
         Transform firstUnitTransform = null;
 
         foreach (var kvp in NetworkManager.Singleton.SpawnManager.SpawnedObjects)
         {
             var netObj = kvp.Value;
+            if (netObj == null) continue;
             if (netObj.OwnerClientId != playerId) continue;
+
             var unit = netObj.GetComponent<UnitNetworkBehaviour>();
             if (unit != null)
             {
+                // Сбрасываем запас передвижения и возможность атаки
                 unit.MovementRemaining.Value = unit.moveSpeed;
-                unit.CanAttack.Value = true;
+
+                // ВНИМАНИЕ: поле называется _canAttack (латиница), см. UnitNetworkBehaviour
+                unit._canAttack.Value = true;
+
                 Debug.Log($"[TurnManager] Reset unit {netObj.NetworkObjectId} for player {playerId}");
 
-                // NEW: Capture the transform of the first unit
+                // Сохраняем первый попавшийся юнит для фокуса камеры (серверная часть)
                 if (firstUnitTransform == null)
                 {
                     firstUnitTransform = netObj.transform;
@@ -113,28 +149,29 @@ public class TurnManager : NetworkBehaviour
             }
         }
 
-        // NEW: If a unit was found, notify the camera to focus on it
+        // Локальное (серверное) событие — если камера слушает на хосте/серве
         if (firstUnitTransform != null)
         {
             OnPlayerUnitTurnStarted?.Invoke(firstUnitTransform);
         }
     }
 
-    [ClientRpc] 
+    [ClientRpc]
     private void StartTurnClientRpc(ulong playerId, int turn, NetworkObjectReference unitReference)
     {
+        // Клиентское событие для UI
         OnTurnStarted?.Invoke(playerId, turn);
 
-        // Если ссылка на юнит действительна, передаем его Transform в событие
-        if (unitReference.TryGet(out var networkObject))
+        // Если ссылка на юнит валидна — отдаём его Transform слушателям (например, камера)
+        if (unitReference.TryGet(out var networkObject) && networkObject != null)
         {
             OnPlayerUnitTurnStarted?.Invoke(networkObject.transform);
         }
         else
         {
-            // Иначе, просто выводим предупреждение
             Debug.LogWarning("[TurnManager] Юнит для центрирования камеры не найден.");
         }
+       
     }
 
     /// <summary>
@@ -142,7 +179,7 @@ public class TurnManager : NetworkBehaviour
     /// </summary>
     public void RequestEndTurn()
     {
-        Debug.Log("LocalClientId " + NetworkManager.Singleton.LocalClientId + "and CurrentPlayerId " + CurrentPlayerId.Value);
+        Debug.Log($"[TurnManager] RequestEndTurn by {NetworkManager.Singleton.LocalClientId}, current is {CurrentPlayerId.Value}");
         if (IsServer || NetworkManager.Singleton.LocalClientId == CurrentPlayerId.Value)
             EndTurnServerRpc();
     }
@@ -150,14 +187,17 @@ public class TurnManager : NetworkBehaviour
     [ServerRpc(RequireOwnership = false)]
     private void EndTurnServerRpc(ServerRpcParams rpcParams = default)
     {
-        // Оповестить о конце хода
+        // Оповестить всех о конце хода
         EndTurnClientRpc(CurrentPlayerId.Value, TurnNumber.Value);
 
         // Смена игрока и номера хода
         var clients = NetworkManager.Singleton.ConnectedClientsIds;
+        if (clients.Count == 0) return;
+
         ulong next = (clients.Count >= 2 && clients[0] == CurrentPlayerId.Value)
             ? clients[1]
             : clients[0];
+
         CurrentPlayerId.Value = next;
         TurnNumber.Value++;
 
@@ -178,6 +218,7 @@ public class TurnManager : NetworkBehaviour
             elapsed += Time.deltaTime;
             yield return null;
         }
+        // По истечении времени — завершаем ход
         EndTurnServerRpc();
     }
 
@@ -186,6 +227,7 @@ public class TurnManager : NetworkBehaviour
         foreach (var kvp in NetworkManager.Singleton.SpawnManager.SpawnedObjects)
         {
             var netObj = kvp.Value;
+            if (netObj == null) continue;
             if (netObj.OwnerClientId == playerId)
             {
                 return netObj.GetComponent<UnitNetworkBehaviour>();

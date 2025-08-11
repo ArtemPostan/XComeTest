@@ -49,11 +49,10 @@ public class UnitCommandController : MonoBehaviour
             if (moveMarkerPrefab)
             {
                 var m = Instantiate(moveMarkerPrefab, tgt + Vector3.up * markerYOffset, Quaternion.identity);
-                // запускаем корутину, которая будет уменьшать маркер и удалит его через markerLifetime
                 StartCoroutine(AnimateAndDestroyMarker(m));
             }
             foreach (var u in sel)
-                u.MoveServerRpc(tgt);
+                u.MoveTo(tgt); // <-- Здесь вызываем публичный метод MoveTo
         }
     }
 

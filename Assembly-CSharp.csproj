@@ -66,12 +66,16 @@
     <Compile Include="Assets\Scripts\GamePlay\UnitNetworkBehaviour.cs" />
     <Compile Include="Assets\Scripts\GamePlay\JoinServer.cs" />
     <Compile Include="Assets\Scripts\Core\UnitSelectionManager.cs" />
+    <Compile Include="Assets\Scripts\GamePlay\UnitAttackRadiusDrawer.cs" />
     <Compile Include="Assets\Scripts\Networking\HostOrClient.cs" />
+    <Compile Include="Assets\Scripts\GamePlay\UnitCombatUIAndInput.cs" />
     <Compile Include="Assets\Scripts\GamePlay\NetworkUtility.cs" />
     <Compile Include="Assets\Scripts\Networking\UGSInitializer.cs" />
     <Compile Include="Assets\Scripts\GamePlay\UnitCommandController.cs" />
+    <Compile Include="Assets\Scripts\GamePlay\UnitPathPreviewDrawer.cs" />
     <Compile Include="Assets\Scripts\GamePlay\CameraControl.cs" />
     <Compile Include="Assets\Scripts\UI\TurnUIManager.cs" />
+    <Compile Include="Assets\Scripts\UI\UnitHealthBar.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="Assets\TextMesh Pro\Shaders\TMPro.cginc" />
