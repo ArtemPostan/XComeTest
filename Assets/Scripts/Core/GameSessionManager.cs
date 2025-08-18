@@ -1,101 +1,76 @@
 // Assets/Scripts/Core/GameSessionManager.cs
+//
+// Обновлено под драфт:
+// - вместо одного unitPrefab теперь список UnitPrefabs (каталог);
+// - добавлен метод SpawnLoadoutFor(ulong, int[], bool isPlayerA), который спавнит 5 выбранных юнитов;
+// - фиксим владение: SpawnWithOwnership (НЕ SpawnAsPlayerObject!) для обычных юнитов.
 
-using System.Collections;
 using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
 
-/// <summary>
-/// После того как NetworkUtility подтянет хоста или клиента,
-/// этот менеджер на сервере (Host) ловит подключения и спавнит для каждого игрока заданное число юнитов
-/// в его зоне (группа спавна).
-/// </summary>
 public class GameSessionManager : MonoBehaviour
 {
-    [Header("Unit Settings")]
-    [Tooltip("Префаб юнита с NetworkObject и UnitNetworkBehaviour")]
-    [SerializeField] private GameObject unitPrefab;
-    [Tooltip("Сколько юнитов спавнить на игрока")]
+    [Header("Unit Catalog")]
+    [Tooltip("Список всех типов юнитов, доступных в драфте (зарегистрированы в NetworkPrefabs).")]
+    [SerializeField] private List<GameObject> unitPrefabs = new List<GameObject>();
+    public List<GameObject> UnitPrefabs => unitPrefabs;
+
+    [Header("Spawn Settings")]
+    [Tooltip("Сколько юнитов по слоту (обычно 5)")]
     [SerializeField] private int unitsPerPlayer = 5;
-    [Tooltip("Радиус вокруг точки зоны, в котором разбросаются юниты")]
     [SerializeField] private float spawnRadius = 1.5f;
 
     [Header("Spawn Zones")]
-    [Tooltip("Точки, задающие зону спавна для игрока A")]
     [SerializeField] private Transform[] spawnZonesPlayerA;
-    [Tooltip("Точки, задающие зону спавна для игрока B")]
     [SerializeField] private Transform[] spawnZonesPlayerB;
 
-    // Чтобы не спавнить дважды для одного игрока
-    private readonly HashSet<ulong> _spawnedFor = new HashSet<ulong>();
-    // Список порядка подключений (0-й — хост, 1-й — первый удалённый клиент и т.д.)
-    private readonly List<ulong> _connectionOrder = new List<ulong>();
+    // Старый автоспавн по подключению больше не используем — драфт зовёт вручную.
 
-    private void Start()
+    public void SpawnLoadoutFor(ulong ownerClientId, int[] selectionIndices, bool isPlayerA)
     {
-        // Подписываемся на подключение клиентов
-        NetworkManager.Singleton.OnClientConnectedCallback += OnClientConnected;
-    }
-
-    private void OnDestroy()
-    {
-        if (NetworkManager.Singleton != null)
-            NetworkManager.Singleton.OnClientConnectedCallback -= OnClientConnected;
-    }
-
-    private void OnClientConnected(ulong clientId)
-    {
-        // Только сервер спавнит
         if (!NetworkManager.Singleton.IsServer)
-            return;
-
-        // Не повторяемся
-        if (_spawnedFor.Contains(clientId))
-            return;
-
-        Debug.Log($"[GameSessionManager] Игрок подключился: {clientId}");
-        _spawnedFor.Add(clientId);
-        _connectionOrder.Add(clientId);
-
-        // Определяем, какую зону даём этому игроку:
-        // если это первый — зона A, второй и далее — зона B
-        bool isPlayerA = (_connectionOrder.IndexOf(clientId) == 0);
-        var zones = isPlayerA ? spawnZonesPlayerA : spawnZonesPlayerB;
-
-        // Спавним unitsPerPlayer юнитов в случайных точках внутри каждой зоны
-        SpawnUnitsFor(clientId, zones);
-
-        // (Необязательно) можно тут сделать ClientRpc, чтобы дать знать клиентам, что их армия готова
-    }
-
-    private void SpawnUnitsFor(ulong ownerClientId, Transform[] zones)
-    {
-        if (zones == null || zones.Length == 0)
         {
-            Debug.LogError("[GameSessionManager] Нет зон спавна для " +
-                (ownerClientId == _connectionOrder[0] ? "Player A" : "Player B"));
+            Debug.LogWarning("[GameSessionManager] SpawnLoadoutFor должен вызываться на сервере.");
             return;
         }
 
-        for (int i = 0; i < unitsPerPlayer; i++)
+        if (selectionIndices == null || selectionIndices.Length == 0)
         {
-            // Выбираем одну из зон циклически (если зон меньше, чем юнитов)
+            Debug.LogError("[GameSessionManager] Пустой лоад-аут.");
+            return;
+        }
+
+        var zones = isPlayerA ? spawnZonesPlayerA : spawnZonesPlayerB;
+        if (zones == null || zones.Length == 0)
+        {
+            Debug.LogError("[GameSessionManager] Нет зон спавна для " + (isPlayerA ? "Player A" : "Player B"));
+            return;
+        }
+
+        for (int i = 0; i < selectionIndices.Length && i < unitsPerPlayer; i++)
+        {
+            int prefabIndex = Mathf.Clamp(selectionIndices[i], 0, unitPrefabs.Count - 1);
+            var prefab = unitPrefabs[prefabIndex];
+            if (prefab == null)
+            {
+                Debug.LogError($"[GameSessionManager] Unit prefab по индексу {prefabIndex} не задан.");
+                continue;
+            }
+
             var zone = zones[i % zones.Length];
-            // Случайное смещение внутри круга радиуса spawnRadius
             Vector2 offset2D = Random.insideUnitCircle * spawnRadius;
             Vector3 spawnPos = zone.position + new Vector3(offset2D.x, 0, offset2D.y);
 
-            // Инстантим на сервере
-            var go = Instantiate(unitPrefab, spawnPos, Quaternion.identity);
+            var go = Instantiate(prefab, spawnPos, Quaternion.identity);
             if (go.TryGetComponent<NetworkObject>(out var no))
             {
-                // Передаём владение этому клиенту
-                no.SpawnAsPlayerObject(ownerClientId, true);
-                Debug.Log($"[GameSessionManager] Спавн #{i} для {ownerClientId} в {spawnPos}");
+                no.SpawnWithOwnership(ownerClientId, true);
+                Debug.Log($"[GameSessionManager] Spawn {prefab.name} for {ownerClientId} at {spawnPos}");
             }
             else
             {
-                Debug.LogError("[GameSessionManager] unitPrefab не содержит NetworkObject!");
+                Debug.LogError("[GameSessionManager] Префаб не содержит NetworkObject!");
                 Destroy(go);
             }
         }

@@ -33,6 +33,12 @@ public class UnitNetworkBehaviour : NetworkBehaviour
     private Color[] _originalColors;
     [SerializeField] private Color _selectedColor = new Color(0.2f, 0.8f, 1f, 1f);
 
+    // === Death ===
+    [SerializeField] private GameObject deathVfxPrefab; // опционально: эффект смерти
+    [SerializeField] private float deathDespawnDelay = 1.0f;
+
+    private bool _isDead;
+
     private void Awake()
     {
         _renderers = GetComponentsInChildren<Renderer>(true);
@@ -219,8 +225,7 @@ public class UnitNetworkBehaviour : NetworkBehaviour
 
         if (Health.Value == 0)
         {
-            // TODO: смерть/деспавн, эффекты
-            // GetComponent<NetworkObject>().Despawn();
+            TryDieServer();
         }
     }
 
@@ -232,6 +237,46 @@ public class UnitNetworkBehaviour : NetworkBehaviour
             if (_renderers[i] == null) continue;
             if (_renderers[i].material.HasProperty("_Color"))
                 _renderers[i].material.color = isSelected ? _selectedColor : _originalColors[i];
+        }
+    }
+
+    private void TryDieServer()
+    {
+        if (!IsServer || _isDead) return;
+        if (Health.Value > 0) return;
+
+        _isDead = true;
+
+        //  лиентам Ч показать анимацию/вfx, скрыть визуал/коллайдеры
+        PlayDeathClientRpc(transform.position);
+
+        // „ерез задержку Ч убрать объект из сети
+        StartCoroutine(DespawnAfterDelay());
+    }
+
+    [ClientRpc]
+    private void PlayDeathClientRpc(Vector3 at)
+    {
+        // ¬изуально "выключаем" юнит: пр€чем рендереры/коллайдеры
+        foreach (var r in GetComponentsInChildren<Renderer>(true)) r.enabled = false;
+        foreach (var c in GetComponentsInChildren<Collider>(true)) c.enabled = false;
+
+        // —павним vfx (если задан)
+        if (deathVfxPrefab != null)
+        {
+            var vfx = Instantiate(deathVfxPrefab, at, Quaternion.identity);
+            Destroy(vfx, 2f);
+        }
+    }
+
+    private System.Collections.IEnumerator DespawnAfterDelay()
+    {
+        yield return new WaitForSeconds(deathDespawnDelay);
+
+        // Ѕезопасно убираем объект из сети (только на сервере)
+        if (this != null && IsServer && TryGetComponent<NetworkObject>(out var no) && no.IsSpawned)
+        {
+            no.Despawn(true); // true Ч также уничтожит GameObject у клиента
         }
     }
 }
