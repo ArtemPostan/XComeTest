@@ -68,12 +68,14 @@
     <Compile Include="Assets\Scripts\UI\UnitDraftUI.cs" />
     <Compile Include="Assets\Scripts\GamePlay\JoinServer.cs" />
     <Compile Include="Assets\Scripts\GamePlay\UnitIconProvider.cs" />
+    <Compile Include="Assets\Scripts\GamePlay\Obstacles\ObstaclePrefab.cs" />
     <Compile Include="Assets\Scripts\Core\UnitSelectionManager.cs" />
     <Compile Include="Assets\Scripts\GamePlay\UnitAttackRadiusDrawer.cs" />
     <Compile Include="Assets\Scripts\Networking\HostOrClient.cs" />
     <Compile Include="Assets\Scripts\GamePlay\UnitCombatUIAndInput.cs" />
     <Compile Include="Assets\Scripts\GamePlay\Obstacles\ObstacleFieldSpawner.cs" />
     <Compile Include="Assets\Scripts\GamePlay\NetworkUtility.cs" />
+    <Compile Include="Assets\Scripts\GamePlay\Obstacles\ObstacleFieldSpawnerMulti.cs" />
     <Compile Include="Assets\Scripts\Core\UnitDraftManager.cs" />
     <Compile Include="Assets\Scripts\Networking\UGSInitializer.cs" />
     <Compile Include="Assets\Scripts\GamePlay\UnitCommandController.cs" />

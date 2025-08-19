@@ -1,13 +1,8 @@
 // Assets/Scripts/World/ObstacleFieldSpawner.cs
 //
 // Серверный спавнер групп препятствий (server-driven).
-// Ищет точки на поле (Collider) так, чтобы не пересекаться с юнитами и другими группами,
-// инстанцирует префаб группы (с NetworkObject + ObstacleGroupGeneratorServerDriven),
-// задаёт параметры группы (ElementsCount/Radius) и делает Spawn().
-// Внутри группы сервер сам заполнит точную раскладку через NetworkList, клиенты НЕ рандомят.
+// Добавлены подробные логи: [Spawner] ...  + сводка причин, почему не получилось поставить группу.
 //
-// Вызовите SpawnObstaclesServer() ПОСЛЕ спавна юнитов и ДО начала первого хода.
-
 using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
@@ -55,24 +50,28 @@ public class ObstacleFieldSpawner : MonoBehaviour
     {
         if (!NetworkManager.Singleton || !NetworkManager.Singleton.IsServer)
         {
-            Debug.LogWarning("[ObstacleFieldSpawner] SpawnObstaclesServer должен вызываться на сервере/хосте.");
+            Debug.LogWarning("[Spawner] SpawnObstaclesServer должен вызываться на сервере/хосте.");
             return;
         }
 
         if (fieldCollider == null)
         {
-            Debug.LogError("[ObstacleFieldSpawner] Не задан fieldCollider.");
+            Debug.LogError("[Spawner] Не задан fieldCollider.");
             return;
         }
         if (obstacleGroupPrefab == null)
         {
-            Debug.LogError("[ObstacleFieldSpawner] Не задан obstacleGroupPrefab.");
+            Debug.LogError("[Spawner] Не задан obstacleGroupPrefab.");
             return;
         }
 
+        // Быстрая проверка регистрации префаба в NetworkManager
+        if (!PrefabRegistered(obstacleGroupPrefab))
+            Debug.LogWarning("[Spawner] ВНИМАНИЕ: obstacleGroupPrefab может быть не зарегистрирован в NetworkManager/NetworkPrefabs. " +
+                             "Если так — no.Spawn() не создаст сетевой объект.");
+
         _placed.Clear();
 
-        // Собираем стартовые позиции юнитов на момент генерации
         var unitPositions = new List<Vector3>();
         foreach (var u in FindObjectsOfType<UnitNetworkBehaviour>())
             unitPositions.Add(u.transform.position);
@@ -80,42 +79,55 @@ public class ObstacleFieldSpawner : MonoBehaviour
         int targetGroups = Random.Range(minGroups, Mathf.Max(minGroups, maxGroups + 1));
         int attempts = 0;
 
+        // Счётчики для сводки причин отказов
+        int missRay = 0, nearUnit = 0, nearGroup = 0, badPrefab = 0, spawned = 0;
+
+        Debug.Log($"[Spawner] START. targetGroups={targetGroups}, attemptsLimit={maxPlacementAttempts}, " +
+                  $"units={unitPositions.Count}, groundMask={groundMask.value}");
+
         while (_placed.Count < targetGroups && attempts < maxPlacementAttempts)
         {
             attempts++;
 
             if (!TryPickPointOnField(out var posOnField))
+            {
+                missRay++;
                 continue;
+            }
 
             float radius = Random.Range(groupRadiusRange.x, groupRadiusRange.y);
             int elements = Random.Range(elementsCountRange.x, elementsCountRange.y + 1);
 
-            if (!IsFarFromUnits(posOnField, radius, unitPositions)) continue;
-            if (!IsFarFromOtherGroups(posOnField, radius)) continue;
+            if (!IsFarFromUnits(posOnField, radius, unitPositions)) { nearUnit++; continue; }
+            if (!IsFarFromOtherGroups(posOnField, radius)) { nearGroup++; continue; }
 
-            // Создаём группу и задаём параметры до Spawn()
             var go = Instantiate(obstacleGroupPrefab, posOnField, Quaternion.identity);
 
             if (!go.TryGetComponent<NetworkObject>(out var no) ||
                 !go.TryGetComponent<ObstacleGroupGeneratorServerDriven>(out var gen))
             {
-                Debug.LogError("[ObstacleFieldSpawner] Префаб группы должен содержать NetworkObject и ObstacleGroupGeneratorServerDriven.");
+                Debug.LogError("[Spawner] Префаб группы должен содержать NetworkObject И ObstacleGroupGeneratorServerDriven.");
                 Destroy(go);
+                badPrefab++;
                 continue;
             }
 
             gen.ElementsCount.Value = elements;
             gen.Radius.Value = radius;
 
-            // Спавним сетевой контейнер группы (дети — локальные, придут из NetworkList)
+            Debug.Log($"[Spawner] Instantiate '{go.name}' at {posOnField} (r={radius:F2}, elements={elements})");
             no.Spawn();
+            if (no.IsSpawned) spawned++; else Debug.LogWarning($"[Spawner] '{go.name}' не IsSpawned после no.Spawn(). Проверьте NetworkPrefabs.");
 
             _placed.Add((posOnField, radius));
         }
 
+        Debug.Log($"[Spawner] DONE. PlacedGroups={_placed.Count}/{targetGroups} (attempts={attempts}/{maxPlacementAttempts}). " +
+                  $"Summary: rayMiss={missRay}, tooCloseToUnit={nearUnit}, tooCloseToGroup={nearGroup}, badPrefab={badPrefab}, spawnedOk={spawned}");
+
         if (_placed.Count < targetGroups)
         {
-            Debug.LogWarning($"[ObstacleFieldSpawner] Расставлено {_placed.Count}/{targetGroups} групп (не хватило валидных позиций?).");
+            Debug.LogWarning($"[Spawner] Расставлено {_placed.Count}/{targetGroups} групп (не хватило валидных позиций?).");
         }
     }
 
@@ -150,7 +162,6 @@ public class ObstacleFieldSpawner : MonoBehaviour
         float x = Random.Range(b.min.x, b.max.x);
         float z = Random.Range(b.min.z, b.max.z);
 
-        // Луч сверху вниз: учитываем реальный рельеф/плоскость
         Vector3 rayStart = new Vector3(x, b.max.y + 10f, z);
         if (Physics.Raycast(rayStart, Vector3.down, out var hit, b.size.y + 50f, groundMask, QueryTriggerInteraction.Ignore))
         {
@@ -159,7 +170,24 @@ public class ObstacleFieldSpawner : MonoBehaviour
                 worldPoint = hit.point;
                 return true;
             }
+            else
+            {
+                Debug.Log($"[Spawner] Raycast попал в '{hit.collider.name}', а должен в '{fieldCollider.name}'. Проверьте fieldCollider/groundMask.");
+            }
         }
+        else
+        {
+            Debug.Log("[Spawner] Raycast НЕ попал в поле. Проверьте высоту запуска/маску слоёв/коллайдер.");
+        }
+        return false;
+    }
+
+    private bool PrefabRegistered(GameObject prefab)
+    {
+        var nm = NetworkManager.Singleton;
+        if (!nm) return false;
+        foreach (var p in nm.NetworkConfig.Prefabs.Prefabs)
+            if (p != null && p.Prefab == prefab) return true;
         return false;
     }
 }

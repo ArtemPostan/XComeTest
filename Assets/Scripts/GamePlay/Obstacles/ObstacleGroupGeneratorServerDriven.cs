@@ -1,4 +1,5 @@
 // Assets/Scripts/World/ObstacleGroupGeneratorServerDriven.cs
+// Добавлены логи: [Generator] ...  и [Generator:LAYOUT] ...
 using System;
 using System.Collections.Generic;
 using Unity.Netcode;
@@ -14,17 +15,13 @@ public class ObstacleGroupGeneratorServerDriven : NetworkBehaviour
     [Header("Local Visual Tweaks")]
     [SerializeField] private float yOffset = 0f;
 
-    // Параметры группы задаёт сервер ДО Spawn()
     public NetworkVariable<int> ElementsCount = new NetworkVariable<int>(
         5, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
 
     public NetworkVariable<float> Radius = new NetworkVariable<float>(
         2.5f, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
 
-    // Точная раскладка, которую рассылает сервер
     private NetworkList<ElementLayout> _layout;
-
-    // Локально созданные дети (не сетевые)
     private readonly List<GameObject> _spawnedChildren = new();
 
     private void Awake()
@@ -41,17 +38,18 @@ public class ObstacleGroupGeneratorServerDriven : NetworkBehaviour
 
         _layout.OnListChanged += OnLayoutChanged;
 
+        Debug.Log($"[Generator] OnNetworkSpawn '{name}'. IsServer={IsServer}, " +
+                  $"prefabs={elementPrefabs?.Count ?? 0}, layoutCount={_layout?.Count ?? -1}, " +
+                  $"Elements={ElementsCount.Value}, Radius={Radius.Value}");
+
         if (IsServer)
         {
-            // Сервер один раз наполняет список
             if (_layout.Count == 0)
                 ServerBuildLayout();
-            // На сервере тоже собираем визуал (он такой же, как у клиентов)
             RebuildFromLayout();
         }
         else
         {
-            // Клиент: если снапшот уже пришёл — соберём сразу
             if (_layout.Count > 0)
                 RebuildFromLayout();
         }
@@ -61,14 +59,13 @@ public class ObstacleGroupGeneratorServerDriven : NetworkBehaviour
     {
         base.OnNetworkDespawn();
         if (_layout != null) _layout.OnListChanged -= OnLayoutChanged;
-
-        // подчистим локальные объекты
         ClearChildren();
+        Debug.Log($"[Generator] OnNetworkDespawn '{name}'. Cleared local children.");
     }
 
     private void OnLayoutChanged(NetworkListEvent<ElementLayout> _)
     {
-        // ВАЖНО: НЕ добавляем по одному! Каждый раз пересобираем целиком по текущему списку.
+        Debug.Log($"[Generator:LAYOUT] '{name}' list changed. Count={_layout.Count}");
         RebuildFromLayout();
     }
 
@@ -76,26 +73,41 @@ public class ObstacleGroupGeneratorServerDriven : NetworkBehaviour
     {
         ClearChildren();
 
-        if (_layout == null || _layout.Count == 0 || elementPrefabs.Count == 0)
+        if (_layout == null || _layout.Count == 0)
+        {
+            Debug.LogWarning($"[Generator] '{name}' RebuildFromLayout: layout empty.");
             return;
+        }
+        if (elementPrefabs == null || elementPrefabs.Count == 0)
+        {
+            Debug.LogError($"[Generator] '{name}' RebuildFromLayout: NO elementPrefabs assigned.");
+            return;
+        }
 
+        int created = 0;
         foreach (var el in _layout)
         {
             int idx = Mathf.Clamp(el.prefabIndex, 0, elementPrefabs.Count - 1);
             var prefab = elementPrefabs[idx];
-            if (prefab == null) continue;
+            if (prefab == null)
+            {
+                Debug.LogWarning($"[Generator] '{name}' prefab index {idx} is null. Skip.");
+                continue;
+            }
 
             var go = Instantiate(prefab, transform);
             go.transform.localPosition = el.localPos + new Vector3(0f, yOffset, 0f);
             go.transform.localRotation = Quaternion.Euler(0f, el.rotY, 0f);
             go.transform.localScale = el.scale;
 
-            // Гарантируем чисто локальные статики
             var no = go.GetComponent<NetworkObject>(); if (no) Destroy(no);
             var rb = go.GetComponent<Rigidbody>(); if (rb) Destroy(rb);
 
             _spawnedChildren.Add(go);
+            created++;
         }
+
+        Debug.Log($"[Generator] '{name}' Rebuild complete. Spawned children: {created}");
     }
 
     private void ClearChildren()
@@ -108,12 +120,23 @@ public class ObstacleGroupGeneratorServerDriven : NetworkBehaviour
     /// <summary>Сервер генерирует точную раскладку и пишет её в NetworkList.</summary>
     private void ServerBuildLayout()
     {
-        if (!IsServer || elementPrefabs == null || elementPrefabs.Count == 0) return;
+        if (!IsServer)
+        {
+            Debug.LogWarning($"[Generator] '{name}' ServerBuildLayout called on client. Ignored.");
+            return;
+        }
+        if (elementPrefabs == null || elementPrefabs.Count == 0)
+        {
+            Debug.LogError($"[Generator] '{name}' No elementPrefabs set on server.");
+            return;
+        }
 
         int count = Mathf.Max(1, ElementsCount.Value);
         float r = Mathf.Max(0.1f, Radius.Value);
 
         _layout.Clear();
+
+        Debug.Log($"[Generator:LAYOUT] '{name}' Build start. Elements={count}, Radius={r}, Prefabs={elementPrefabs.Count}");
 
         for (int i = 0; i < count; i++)
         {
@@ -131,6 +154,8 @@ public class ObstacleGroupGeneratorServerDriven : NetworkBehaviour
 
             _layout.Add(new ElementLayout(prefabIdx, localPos, rotY, scl));
         }
+
+        Debug.Log($"[Generator:LAYOUT] '{name}' Build done. LayoutCount={_layout.Count}");
     }
 
     [Serializable]

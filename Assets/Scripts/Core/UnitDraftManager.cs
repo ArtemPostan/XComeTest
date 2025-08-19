@@ -91,7 +91,8 @@ public class UnitDraftManager : NetworkBehaviour
             _unitsSpawned = true;
             SpawnChosenUnits();
             // <<< НОВОЕ: сгенерировать препятствия до старта игры
-            var obstacleSpawner = FindObjectOfType<ObstacleFieldSpawner>();
+            //var obstacleSpawner = FindObjectOfType<ObstacleFieldSpawner>();
+            var obstacleSpawner = FindObjectOfType<ObstacleFieldSpawnerMulti>();
             if (obstacleSpawner != null) obstacleSpawner.SpawnObstaclesServer();
 
             EndDraftClientRpc();

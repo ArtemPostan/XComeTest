@@ -5552,7 +5552,7 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 2038825490}
-  - component: {fileID: 2038825489}
+  - component: {fileID: 2038825491}
   m_Layer: 0
   m_Name: ObstacleSpawner
   m_TagString: Untagged
@@ -5560,30 +5560,6 @@ GameObject:
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
   m_IsActive: 1
---- !u!114 &2038825489
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 2038825487}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 492d435792c1b72479fc574e05330456, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  fieldCollider: {fileID: 2063560121}
-  obstacleGroupPrefab: {fileID: 6453383765390829268, guid: 52336907b800c654685ef5e489b075cd, type: 3}
-  minGroups: 10
-  maxGroups: 20
-  groupRadiusRange: {x: 2, y: 4}
-  elementsCountRange: {x: 3, y: 7}
-  minDistanceToUnits: 2.5
-  groupsPadding: 1
-  maxPlacementAttempts: 200
-  groundMask:
-    serializedVersion: 2
-    m_Bits: 8
 --- !u!4 &2038825490
 Transform:
   m_ObjectHideFlags: 0
@@ -5593,12 +5569,51 @@ Transform:
   m_GameObject: {fileID: 2038825487}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 240.75035, y: 237.88525, z: 5.2255707}
+  m_LocalPosition: {x: 240.75035, y: 0, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
-  m_ConstrainProportionsScale: 0
+  m_ConstrainProportionsScale: 1
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &2038825491
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2038825487}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: df1a3876612ad5849b2dbc64496a43cc, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  fieldCollider: {fileID: 2063560121}
+  usePerArchetypeQuotas: 1
+  globalMinGroups: 6
+  globalMaxGroups: 12
+  minDistanceToUnits: 2.5
+  groupsPadding: 1
+  maxPlacementAttempts: 600
+  groundMask:
+    serializedVersion: 2
+    m_Bits: 8
+  archetypes:
+  - groupPrefab: {fileID: 4831695650435180744, guid: 805bcd6bcd863d246bd7e6f4e571496f, type: 3}
+    minGroups: 2
+    maxGroups: 10
+    groupRadiusRange: {x: 1, y: 5}
+    elementsCountRange: {x: 1, y: 10}
+    minDistanceToUnitsOverride: 10
+    groupsPaddingOverride: 0
+    weight: 1
+  - groupPrefab: {fileID: 6453383765390829268, guid: 52336907b800c654685ef5e489b075cd, type: 3}
+    minGroups: 10
+    maxGroups: 30
+    groupRadiusRange: {x: 1, y: 3}
+    elementsCountRange: {x: 1, y: 3}
+    minDistanceToUnitsOverride: 10
+    groupsPaddingOverride: 3
+    weight: 1
 --- !u!1 &2044856765
 GameObject:
   m_ObjectHideFlags: 0
