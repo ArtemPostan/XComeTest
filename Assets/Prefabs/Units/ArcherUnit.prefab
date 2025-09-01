@@ -47,10 +47,9 @@ GameObject:
   - component: {fileID: 732825241412242510}
   - component: {fileID: 6535654663931667796}
   - component: {fileID: -5894031017817996668}
-  - component: {fileID: 4990127452592989027}
-  - component: {fileID: 6927537060901869936}
   - component: {fileID: 2098044502901393224}
   - component: {fileID: -2592906158192842030}
+  - component: {fileID: -3165070156966225125}
   m_Layer: 6
   m_Name: ArcherUnit
   m_TagString: Untagged
@@ -87,7 +86,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d5a57f767e5e46a458fc5d3c628d0cbb, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  GlobalObjectIdHash: 482921629
+  GlobalObjectIdHash: 3310606484
   InScenePlacedSourceGlobalObjectIdHash: 3310606484
   AlwaysReplicateAsRoot: 0
   SynchronizeTransform: 1
@@ -127,45 +126,6 @@ MonoBehaviour:
   InLocalSpace: 0
   Interpolate: 1
   SlerpPosition: 0
---- !u!54 &4990127452592989027
-Rigidbody:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 3242858618754922059}
-  serializedVersion: 4
-  m_Mass: 1
-  m_Drag: 0
-  m_AngularDrag: 0.05
-  m_CenterOfMass: {x: 0, y: 0, z: 0}
-  m_InertiaTensor: {x: 1, y: 1, z: 1}
-  m_InertiaRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_IncludeLayers:
-    serializedVersion: 2
-    m_Bits: 0
-  m_ExcludeLayers:
-    serializedVersion: 2
-    m_Bits: 0
-  m_ImplicitCom: 1
-  m_ImplicitTensor: 1
-  m_UseGravity: 1
-  m_IsKinematic: 0
-  m_Interpolate: 0
-  m_Constraints: 116
-  m_CollisionDetection: 0
---- !u!114 &6927537060901869936
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 3242858618754922059}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: f6c0be61502bb534f922ebb746851216, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
 --- !u!114 &2098044502901393224
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -178,8 +138,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: a9011ca4978168a4cbe7c85133ecf6f3, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  <moveSpeed>k__BackingField: 15
+  <moveSpeed>k__BackingField: 20
   <AttackRadius>k__BackingField: 15
+  <attackDamage>k__BackingField: 100
   maxHealth: 100
   Health:
     m_InternalValue: 100
@@ -206,6 +167,28 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   DisplayName: Archer
   Icon: {fileID: 21300000, guid: e72fedfb5a8c3dc4583d7f41620281c0, type: 3}
+--- !u!195 &-3165070156966225125
+NavMeshAgent:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3242858618754922059}
+  m_Enabled: 1
+  m_AgentTypeID: 0
+  m_Radius: 1
+  m_Speed: 3.5
+  m_Acceleration: 8
+  avoidancePriority: 50
+  m_AngularSpeed: 120
+  m_StoppingDistance: 0
+  m_AutoTraverseOffMeshLink: 1
+  m_AutoBraking: 1
+  m_AutoRepath: 1
+  m_Height: 2
+  m_BaseOffset: 0
+  m_WalkableMask: 4294967295
+  m_ObstacleAvoidanceType: 4
 --- !u!1 &6357365839579711460
 GameObject:
   m_ObjectHideFlags: 0

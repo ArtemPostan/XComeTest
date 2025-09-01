@@ -1,17 +1,13 @@
-// Assets/Scripts/Units/UnitNetworkBehaviour.cs
-//
-// Исправления:
-// - CanAttack использует допуск epsilon, чтобы не промахиваться по float.
-// - Добавлен StopMovement(), который мгновенно останавливает юнита (сбрасывает TargetPosition).
-//   Вызывается после успешной атаки, чтобы не было "сдвига" после атаки.
-
+п»їusing System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
+using UnityEngine.AI;
 
 public class UnitNetworkBehaviour : NetworkBehaviour
-{   
+{
     [field: SerializeField] public float moveSpeed { get; private set; } = 5f;
     [field: SerializeField] public float AttackRadius { get; private set; } = 3f;
+    [field: SerializeField] public int attackDamage { get; private set; } = 10;
 
     [Header("Health")]
     [SerializeField] private int maxHealth = 100;
@@ -23,9 +19,6 @@ public class UnitNetworkBehaviour : NetworkBehaviour
     public NetworkVariable<float> MovementRemaining = new NetworkVariable<float>(
         0f, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
 
-    public NetworkVariable<Vector3> TargetPosition = new NetworkVariable<Vector3>(
-        Vector3.zero, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
-
     public NetworkVariable<bool> _canAttack = new NetworkVariable<bool>(
         true, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
 
@@ -33,14 +26,23 @@ public class UnitNetworkBehaviour : NetworkBehaviour
     private Color[] _originalColors;
     [SerializeField] private Color _selectedColor = new Color(0.2f, 0.8f, 1f, 1f);
 
+    private NavMeshAgent _agent;
+
     // === Death ===
-    [SerializeField] private GameObject deathVfxPrefab; // опционально: эффект смерти
+    [SerializeField] private GameObject deathVfxPrefab;
     [SerializeField] private float deathDespawnDelay = 1.0f;
 
     private bool _isDead;
 
     private void Awake()
     {
+        _agent = GetComponent<NavMeshAgent>();
+        if (_agent == null)
+        {
+            Debug.LogError("NavMeshAgent component not found on UnitNetworkBehaviour. Please add it to the prefab.");
+            return;
+        }
+
         _renderers = GetComponentsInChildren<Renderer>(true);
         _originalColors = new Color[_renderers.Length];
         for (int i = 0; i < _renderers.Length; i++)
@@ -58,8 +60,6 @@ public class UnitNetworkBehaviour : NetworkBehaviour
             if (MovementRemaining.Value <= 0f)
                 MovementRemaining.Value = moveSpeed;
 
-            TargetPosition.Value = transform.position;
-
             if (Health.Value <= 0)
                 Health.Value = maxHealth;
         }
@@ -71,39 +71,52 @@ public class UnitNetworkBehaviour : NetworkBehaviour
 
         if (IsServer)
         {
-            TargetPosition.Value = transform.position;
             if (MovementRemaining.Value <= 0f)
                 MovementRemaining.Value = moveSpeed;
 
             if (Health.Value <= 0)
                 Health.Value = maxHealth;
         }
+
+        MovementRemaining.OnValueChanged += OnMovementRemainingChanged;
+    }
+
+    public override void OnNetworkDespawn()
+    {
+        base.OnNetworkDespawn();
+        if (IsServer)
+        {
+            MovementRemaining.OnValueChanged -= OnMovementRemainingChanged;
+        }
+    }
+
+    private void OnMovementRemainingChanged(float oldVal, float newVal)
+    {
+        _agent.speed = newVal > 0 ? moveSpeed : 0;
     }
 
     private void Update()
     {
         if (!IsSpawned) return;
 
-        if (TargetPosition.Value != transform.position)
+        if (!IsHost && _agent.enabled)
         {
-            transform.position = Vector3.MoveTowards(
-                transform.position,
-                TargetPosition.Value,
-                moveSpeed * Time.deltaTime
-            );
         }
     }
 
-    // === ДВИЖЕНИЕ ===
+    // === Р”Р’РР–Р•РќРР• ===
     public void MoveTo(Vector3 position)
     {
-        MoveToServerRpc(position);
+        if (IsOwner || (NetworkManager.IsHost && !IsClient))
+        {
+            MoveToServerRpc(position);
+        }
     }
 
     [ServerRpc(RequireOwnership = false)]
     private void MoveToServerRpc(Vector3 requestedPosition, ServerRpcParams rpcParams = default)
     {
-        bool isLocalPlay = NetworkUtility.Instance?.localPlayMode ?? false;
+        bool isLocalPlay = FindObjectOfType<NetworkUtility>()?.localPlayMode ?? false;
 
         if (!isLocalPlay && rpcParams.Receive.SenderClientId != OwnerClientId)
         {
@@ -117,59 +130,55 @@ public class UnitNetworkBehaviour : NetworkBehaviour
             return;
         }
 
-        Vector3 current = transform.position;
-        float distanceToRequested = Vector3.Distance(current, requestedPosition);
-        if (distanceToRequested <= 0.001f)
-            return;
+        _agent.SetDestination(requestedPosition);
+        MoveToClientRpc(requestedPosition);
+    }
 
-        if (MovementRemaining.Value >= distanceToRequested)
-        {
-            MovementRemaining.Value -= distanceToRequested;
-            TargetPosition.Value = requestedPosition;
-        }
-        else
-        {
-            Vector3 dir = (requestedPosition - current).normalized;
-            Vector3 partial = current + dir * MovementRemaining.Value;
-
-            TargetPosition.Value = partial;
-            MovementRemaining.Value = 0f;
-        }
+    [ClientRpc]
+    private void MoveToClientRpc(Vector3 requestedPosition)
+    {
+        _agent.SetDestination(requestedPosition);
     }
 
     [ServerRpc(RequireOwnership = false)]
     public void StopMovementServerRpc(ServerRpcParams rpcParams = default)
     {
-        bool isLocalPlay = NetworkUtility.Instance?.localPlayMode ?? false;
+        bool isLocalPlay = FindObjectOfType<NetworkUtility>()?.localPlayMode ?? false;
         if (!isLocalPlay && rpcParams.Receive.SenderClientId != OwnerClientId) return;
 
-        TargetPosition.Value = transform.position;
+        if (_agent.enabled)
+        {
+            _agent.isStopped = true;
+            _agent.ResetPath();
+        }
     }
 
     public void StopMovement()
     {
-        // Клиент просит сервер остановить движение
         StopMovementServerRpc();
     }
 
-    // === АТАКА ===
+    // === РђРўРђРљРђ ===
     public bool CanAttack(UnitNetworkBehaviour targetUnit)
     {
         if (targetUnit == null) return false;
-        const float epsilon = 0.05f; // небольшой допуск
+        const float epsilon = 0.05f;
         float distance = Vector3.Distance(transform.position, targetUnit.transform.position);
         return distance <= (AttackRadius + epsilon);
     }
 
-    public void AttackTarget(NetworkObject targetNetworkObject, int damage)
+    public void AttackTarget(NetworkObject targetNetworkObject)
     {
-        AttackServerRpc(targetNetworkObject, damage);
+        if (IsOwner || (NetworkManager.IsHost && !IsClient))
+        {
+            AttackServerRpc(targetNetworkObject);
+        }
     }
 
     [ServerRpc(RequireOwnership = false)]
-    private void AttackServerRpc(NetworkObjectReference targetRef, int damage, ServerRpcParams rpcParams = default)
+    private void AttackServerRpc(NetworkObjectReference targetRef, ServerRpcParams rpcParams = default)
     {
-        bool isLocalPlay = NetworkUtility.Instance?.localPlayMode ?? false;
+        bool isLocalPlay = FindObjectOfType<NetworkUtility>()?.localPlayMode ?? false;
         if (!isLocalPlay && rpcParams.Receive.SenderClientId != OwnerClientId)
         {
             Debug.LogWarning($"[Attack] Reject from {rpcParams.Receive.SenderClientId}, owner is {OwnerClientId}");
@@ -195,7 +204,6 @@ public class UnitNetworkBehaviour : NetworkBehaviour
             return;
         }
 
-        // Проверка радиуса с тем же epsilon, что и в CanAttack
         const float epsilon = 0.05f;
         float dist = Vector3.Distance(transform.position, targetUnit.transform.position);
         if (dist > AttackRadius + epsilon)
@@ -204,16 +212,17 @@ public class UnitNetworkBehaviour : NetworkBehaviour
             return;
         }
 
-        // Урон
-        targetUnit.ApplyDamageServerRpc(damage);
+        targetUnit.ApplyDamageServerRpc(attackDamage);
 
-        // Снимаем возможность атаковать до конца хода
         _canAttack.Value = false;
 
-        // ЖЁСТКО останавливаем движение после атаки
-        TargetPosition.Value = transform.position;
+        if (_agent.enabled)
+        {
+            _agent.isStopped = true;
+            _agent.ResetPath();
+        }
 
-        Debug.Log($"[Attack] {name} hit {targetUnit.name} for {damage}, target HP={targetUnit.Health.Value}");
+        Debug.Log($"[Attack] {name} hit {targetUnit.name} for {attackDamage}, target HP={targetUnit.Health.Value}");
     }
 
     [ServerRpc(RequireOwnership = false)]
@@ -229,7 +238,74 @@ public class UnitNetworkBehaviour : NetworkBehaviour
         }
     }
 
-    // === ВИЗУАЛЬНОЕ ВЫДЕЛЕНИЕ ===
+    // === РќРћР’Р«Р• РњР•РўРћР”Р« Р”Р›РЇ РџР Р•Р”РџР РћРЎРњРћРўР Рђ РџРЈРўР ===
+
+    [ServerRpc(RequireOwnership = false)]
+    public void RequestPathPreviewServerRpc(Vector3 destination, ServerRpcParams rpcParams = default)
+    {
+        if (rpcParams.Receive.SenderClientId != OwnerClientId) return;
+
+        NavMeshPath path = new NavMeshPath();
+        if (_agent != null && NavMesh.CalculatePath(transform.position, destination, NavMesh.AllAreas, path))
+        {
+            ClientRpcParams clientRpcParams = new ClientRpcParams
+            {
+                Send = new ClientRpcSendParams
+                {
+                    TargetClientIds = new ulong[] { rpcParams.Receive.SenderClientId }
+                }
+            };
+            DrawPathPreviewClientRpc(path.corners, MovementRemaining.Value, clientRpcParams);
+        }
+        else
+        {
+            ClientRpcParams clientRpcParams = new ClientRpcParams
+            {
+                Send = new ClientRpcSendParams
+                {
+                    TargetClientIds = new ulong[] { rpcParams.Receive.SenderClientId }
+                }
+            };
+            HidePathPreviewClientRpc(clientRpcParams);
+        }
+    }
+
+    [ClientRpc]
+    private void DrawPathPreviewClientRpc(Vector3[] corners, float movementRemaining, ClientRpcParams clientRpcParams = default)
+    {
+        var manager = FindObjectOfType<UnitSelectionManager>();
+        if (manager != null)
+        {
+            manager.DrawPath(corners, movementRemaining);
+        }
+    }
+
+    [ServerRpc(RequireOwnership = false)]
+    public void HidePathPreviewServerRpc(ServerRpcParams rpcParams = default)
+    {
+        if (rpcParams.Receive.SenderClientId != OwnerClientId) return;
+
+        ClientRpcParams clientRpcParams = new ClientRpcParams
+        {
+            Send = new ClientRpcSendParams
+            {
+                TargetClientIds = new ulong[] { rpcParams.Receive.SenderClientId }
+            }
+        };
+        HidePathPreviewClientRpc(clientRpcParams);
+    }
+
+    [ClientRpc]
+    private void HidePathPreviewClientRpc(ClientRpcParams clientRpcParams = default)
+    {
+        var manager = FindObjectOfType<UnitSelectionManager>();
+        if (manager != null)
+        {
+            manager.HidePath();
+        }
+    }
+
+    // === Р’РР—РЈРђР›Р¬РќРћР• Р’Р«Р”Р•Р›Р•РќРР• ===
     public void SetSelected(bool isSelected)
     {
         for (int i = 0; i < _renderers.Length; i++)
@@ -247,21 +323,19 @@ public class UnitNetworkBehaviour : NetworkBehaviour
 
         _isDead = true;
 
-        // Клиентам — показать анимацию/вfx, скрыть визуал/коллайдеры
         PlayDeathClientRpc(transform.position);
 
-        // Через задержку — убрать объект из сети
         StartCoroutine(DespawnAfterDelay());
     }
 
     [ClientRpc]
     private void PlayDeathClientRpc(Vector3 at)
     {
-        // Визуально "выключаем" юнит: прячем рендереры/коллайдеры
         foreach (var r in GetComponentsInChildren<Renderer>(true)) r.enabled = false;
         foreach (var c in GetComponentsInChildren<Collider>(true)) c.enabled = false;
 
-        // Спавним vfx (если задан)
+        if (_agent != null) _agent.enabled = false;
+
         if (deathVfxPrefab != null)
         {
             var vfx = Instantiate(deathVfxPrefab, at, Quaternion.identity);
@@ -273,10 +347,9 @@ public class UnitNetworkBehaviour : NetworkBehaviour
     {
         yield return new WaitForSeconds(deathDespawnDelay);
 
-        // Безопасно убираем объект из сети (только на сервере)
         if (this != null && IsServer && TryGetComponent<NetworkObject>(out var no) && no.IsSpawned)
         {
-            no.Despawn(true); // true — также уничтожит GameObject у клиента
+            no.Despawn(true);
         }
     }
 }

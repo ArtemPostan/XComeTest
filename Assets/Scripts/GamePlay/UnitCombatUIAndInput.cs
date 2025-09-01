@@ -2,12 +2,13 @@
 //
 // ПКМ по врагу:
 //  - если враг в радиусе атаки -> ТОЛЬКО атака (движение НЕ запускается);
-//  - если не в радиусе -> движение к врагу (с частичным шагом делает UnitNetworkBehaviour).
+//  - если не в радиусе -> движение к врагу.
 //
 // Также меняет курсор (если валидные текстуры) либо показывает fallback-иконку над врагом.
 
 using UnityEngine;
 using Unity.Netcode;
+using UnityEngine.AI;
 
 [DefaultExecutionOrder(205)]
 public class UnitCombatUIAndInput : MonoBehaviour
@@ -29,9 +30,6 @@ public class UnitCombatUIAndInput : MonoBehaviour
 
     [Header("Raycast")]
     [SerializeField] private LayerMask unitMask = ~0;
-
-    [Header("Gameplay")]
-    [SerializeField] private int attackDamage = 10;
 
     private Camera _cam;
     private UnitNetworkBehaviour _hoverEnemy;
@@ -114,20 +112,25 @@ public class UnitCombatUIAndInput : MonoBehaviour
 
             if (canAttackNow)
             {
-                // 1) Атакуем
-                _selectedUnit.AttackTarget(_hoverEnemy.NetworkObject, attackDamage);
-
-                // 2) ЖЁСТКО останавливаем любое запущенное движение (на всякий случай)
-                _selectedUnit.StopMovement();
-
-                // 3) НИЧЕГО не двигаем после атаки
-                return;
+                // Если враг в радиусе атаки -> Атакуем
+                _selectedUnit.AttackTarget(_hoverEnemy.NetworkObject);
             }
-
-            // Если не достаём — двигаемся к врагу (частичный шаг внутри MoveToServerRpc)
-            if (_selectedUnit.MovementRemaining.Value > 0f)
+            else
             {
-                _selectedUnit.MoveTo(_hoverEnemy.transform.position);
+                // Если не в радиусе -> Двигаемся к врагу
+                if (_selectedUnit.MovementRemaining.Value > 0f)
+                {
+                    // Вычисляем ближайшую точку к врагу
+                    Vector3 targetPos = _hoverEnemy.transform.position;
+                    Vector3 myPos = _selectedUnit.transform.position;
+                    Vector3 directionToEnemy = (targetPos - myPos).normalized;
+
+                    // Уменьшаем дистанцию, чтобы остановиться на расстоянии атаки
+                    Vector3 moveDestination = targetPos - directionToEnemy * _selectedUnit.AttackRadius;
+
+                    // Отправляем команду на движение
+                    _selectedUnit.MoveTo(moveDestination);
+                }
             }
         }
     }
@@ -153,8 +156,8 @@ public class UnitCombatUIAndInput : MonoBehaviour
     private void UpdatePointerVisual()
     {
         bool canAttackNow = (_hoverEnemy != null) &&
-                            _selectedUnit._canAttack.Value &&
-                            _selectedUnit.CanAttack(_hoverEnemy);
+                             _selectedUnit._canAttack.Value &&
+                             _selectedUnit.CanAttack(_hoverEnemy);
 
         if (_cursorDefaultSafe != null && _cursorAttackSafe != null)
         {

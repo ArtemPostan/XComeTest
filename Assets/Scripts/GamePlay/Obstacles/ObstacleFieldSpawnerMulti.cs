@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections;
 using System.Collections.Generic;
+using Unity.AI.Navigation; // Обязательно добавьте эту директиву!
 using Unity.Netcode;
 using UnityEngine;
 
@@ -14,6 +15,10 @@ public class ObstacleFieldSpawnerMulti : MonoBehaviour
     [Header("Area")]
     [SerializeField, Tooltip("Коллайдер плоскости/террейна, ограничивающий область спавна препятствий")]
     private Collider fieldCollider;
+
+    [Header("NavMesh")]
+    [SerializeField, Tooltip("Компонент NavMeshSurface для перестройки навигационной сетки после спавна")]
+    private NavMeshSurface navMeshSurface;
 
     [Header("Modes")]
     [SerializeField, Tooltip("true = размещаем по квотам каждого типа; false = смешанный пул по весам")]
@@ -91,6 +96,11 @@ public class ObstacleFieldSpawnerMulti : MonoBehaviour
         if (archetypes == null || archetypes.Count == 0)
         {
             Debug.LogError("[Spawner] Не задан список Archetypes.");
+            return;
+        }
+        if (!navMeshSurface)
+        {
+            Debug.LogError("[Spawner] Не задан NavMeshSurface. Обязательно добавьте его и укажите в инспекторе.");
             return;
         }
 
@@ -173,6 +183,11 @@ public class ObstacleFieldSpawnerMulti : MonoBehaviour
         }
 
         Debug.Log($"[Spawner] DONE. Placed groups total: {_placed.Count}");
+
+        // 🚀 Запускаем перестройку NavMesh, чтобы учесть все новые препятствия
+        Debug.Log("[Spawner] Building NavMesh now...");
+        navMeshSurface.BuildNavMesh();
+        Debug.Log("[Spawner] NavMesh build complete.");
     }
 
     // ---------- Размещение по квоте типа ----------
@@ -233,14 +248,10 @@ public class ObstacleFieldSpawnerMulti : MonoBehaviour
     {
         var go = Instantiate(a.groupPrefab, posOnField, Quaternion.identity);
 
-        // складываем в отдельный корневой контейнер для наглядности
-        var root = GameObject.Find("Obstacles (Server)") ?? new GameObject("Obstacles (Server)");
-        go.transform.SetParent(root.transform, worldPositionStays: true);
-
         if (!go.TryGetComponent<NetworkObject>(out var no) ||
             !go.TryGetComponent<ObstacleGroupGeneratorServerDriven>(out var gen))
         {
-            Debug.LogError("[Spawner] Префаб группы должен содержать NetworkObject и ObstacleGroupGeneratorServerDriven.");
+            Debug.LogError("[Spawner] Prefab must have NetworkObject and ObstacleGroupGeneratorServerDriven.");
             Destroy(go);
             return false;
         }
@@ -248,10 +259,33 @@ public class ObstacleFieldSpawnerMulti : MonoBehaviour
         gen.ElementsCount.Value = elements;
         gen.Radius.Value = radius;
 
+        // First, spawn the NetworkObject
         Debug.Log($"[Spawner] Instantiate '{go.name}' at {posOnField} (r={radius:F2}, elements={elements})");
         no.Spawn();
 
-        // проверим статус спавна на следующий кадр
+        // Find or create the root, and get its NetworkObject
+        var rootGo = GameObject.Find("Obstacles (Server)");
+        NetworkObject rootNo;
+
+        if (rootGo == null)
+        {
+            // If not found, create a new GameObject and add a NetworkObject component to it
+            rootGo = new GameObject("Obstacles (Server)");
+            rootNo = rootGo.AddComponent<NetworkObject>();
+
+            // You MUST spawn the parent NetworkObject first!
+            // This assumes the parent object is not part of the scene from the start
+            rootNo.Spawn();
+        }
+        else
+        {
+            // If found, get its NetworkObject component
+            rootNo = rootGo.GetComponent<NetworkObject>();
+        }
+
+        // Now, safely set the NetworkObject as a child of another NetworkObject
+        go.transform.SetParent(rootNo.transform, worldPositionStays: true);
+
         StartCoroutine(CheckSpawn(no, go));
 
         _placed.Add((posOnField, radius, pad));

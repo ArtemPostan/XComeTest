@@ -15,9 +15,10 @@ public class ObstacleGroupGeneratorServerDriven : NetworkBehaviour
     [Header("Local Visual Tweaks")]
     [SerializeField] private float yOffset = 0f;
 
+    [HideInInspector]
     public NetworkVariable<int> ElementsCount = new NetworkVariable<int>(
         5, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
-
+    [HideInInspector]
     public NetworkVariable<float> Radius = new NetworkVariable<float>(
         2.5f, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
 

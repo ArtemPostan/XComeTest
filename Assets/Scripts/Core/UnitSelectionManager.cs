@@ -1,11 +1,7 @@
-// Assets/Scripts/Units/UnitSelectionManager.cs
-//
-// Важно: HandleRightMouse НЕ двигает по земле, если курсор над юнитом.
-// Это предотвращает «движение поверх атаки», когда ПКМ нажимается по врагу.
-
-using System.Collections.Generic;
+п»їusing System.Collections.Generic;
 using UnityEngine;
 using Unity.Netcode;
+using UnityEngine.AI;
 
 public class UnitSelectionManager : MonoBehaviour
 {
@@ -57,7 +53,13 @@ public class UnitSelectionManager : MonoBehaviour
             tm.OnTurnStarted.AddListener((pid, turn) =>
                 _gameActive = (NetworkManager.Singleton.LocalClientId == pid));
             tm.OnTurnEnded.AddListener((pid, turn) =>
-                _gameActive = false);
+            {
+                _gameActive = false;
+                if (NetworkManager.Singleton.LocalClientId == pid)
+                {
+                    DeselectAll();
+                }
+            });
         }
     }
 
@@ -68,8 +70,28 @@ public class UnitSelectionManager : MonoBehaviour
         HandleLeftMouse();
         HandleRightMouse();
 
-        UpdateAttackRadiusDrawing();
-        UpdatePathPreview();
+        if (_selected.Count == 1)
+        {
+            UnitNetworkBehaviour unit = _selected[0];
+            // РћС‚РѕР±СЂР°Р¶РµРЅРёРµ РїСѓС‚Рё Рё СЂР°РґРёСѓСЃР° Р°С‚Р°РєРё С‚РѕР»СЊРєРѕ РґР»СЏ СЋРЅРёС‚Р° С‚РµРєСѓС‰РµРіРѕ РёРіСЂРѕРєР°
+            if (unit.IsOwner || (NetworkManager.Singleton.IsHost && !NetworkManager.Singleton.IsClient))
+            {
+                UpdateAttackRadiusDrawing();
+                UpdatePathPreview();
+            }
+            else
+            {
+                // Р•СЃР»Рё СЋРЅРёС‚ РЅРµ РЅР°С€, СЃРєСЂС‹РІР°РµРј РІСЃРµ
+                _radiusDrawerComponent.HideRadius();
+                _pathPreview.Hide();
+            }
+        }
+        else
+        {
+            // Р•СЃР»Рё РІС‹Р±СЂР°РЅРѕ РЅРµСЃРєРѕР»СЊРєРѕ СЋРЅРёС‚РѕРІ РёР»Рё РЅРё РѕРґРЅРѕРіРѕ, СЃРєСЂС‹РІР°РµРј РІСЃРµ
+            _radiusDrawerComponent.HideRadius();
+            _pathPreview.Hide();
+        }
     }
 
     void OnGUI()
@@ -111,10 +133,6 @@ public class UnitSelectionManager : MonoBehaviour
         if (!Input.GetMouseButtonDown(1)) return;
         if (_selected.Count == 0) return;
 
-        // Если под курсором юнит — НИЧЕГО не делаем здесь.
-        // Пусть UnitCombatUIAndInput решит: атаковать или подойти.
-        if (IsPointerOverUnit()) return;
-
         Ray ray = _cam.ScreenPointToRay(Input.mousePosition);
         if (Physics.Raycast(ray, out var hit, 1000f, groundMask, QueryTriggerInteraction.Ignore))
         {
@@ -129,21 +147,40 @@ public class UnitSelectionManager : MonoBehaviour
                 MoveGroupTo(destination);
             }
         }
+        else if (IsPointerOverUnit())
+        {
+            if (_selected.Count == 1)
+            {
+                var targetUnit = GetUnitUnderMouse();
+                if (targetUnit != null && _selected[0].CanAttack(targetUnit))
+                {
+                    _selected[0].AttackTarget(targetUnit.NetworkObject);
+                }
+            }
+        }
+    }
+
+    private UnitNetworkBehaviour GetUnitUnderMouse()
+    {
+        if (_cam == null) _cam = Camera.main;
+        if (_cam == null) return null;
+        Ray ray = _cam.ScreenPointToRay(Input.mousePosition);
+        if (Physics.Raycast(ray, out var hit, 1000f, unitMask, QueryTriggerInteraction.Ignore))
+        {
+            return hit.collider.GetComponentInParent<UnitNetworkBehaviour>();
+        }
+        return null;
     }
 
     private void SelectUnitUnderMouse()
     {
         DeselectAll();
-        Ray ray = _cam.ScreenPointToRay(Input.mousePosition);
-        if (Physics.Raycast(ray, out var hit, 1000f, ~0, QueryTriggerInteraction.Ignore))
-        {
-            var unit = hit.collider.GetComponentInParent<UnitNetworkBehaviour>();
-            bool isLocalPlay = FindObjectOfType<NetworkUtility>()?.localPlayMode ?? false;
+        var unit = GetUnitUnderMouse();
+        bool isLocalPlay = FindObjectOfType<NetworkUtility>()?.localPlayMode ?? false;
 
-            if (unit != null && (isLocalPlay || unit.IsOwner))
-            {
-                SelectSingleUnit(unit);
-            }
+        if (unit != null && (isLocalPlay || unit.IsOwner))
+        {
+            SelectSingleUnit(unit);
         }
     }
 
@@ -169,7 +206,11 @@ public class UnitSelectionManager : MonoBehaviour
 
         if (_selected.Count > 1)
         {
-            ClearSingleSelection();
+            _selectedUnit = null;
+        }
+        else if (_selected.Count == 1)
+        {
+            _selectedUnit = _selected[0];
         }
     }
 
@@ -177,9 +218,6 @@ public class UnitSelectionManager : MonoBehaviour
     {
         DeselectAll();
         _selectedUnit = u;
-
-        _radiusDrawerComponent.SetRadius(_selectedUnit.AttackRadius);
-
         _selected.Add(u);
         u.SetSelected(true);
     }
@@ -192,74 +230,64 @@ public class UnitSelectionManager : MonoBehaviour
             float angle = i * Mathf.PI * 2f / _selected.Count;
             Vector3 offset = new Vector3(Mathf.Sin(angle) * radius, 0, Mathf.Cos(angle) * radius);
             Vector3 unitDestination = destination + offset;
-
             _selected[i].MoveTo(unitDestination);
         }
     }
 
-    private void ClearSingleSelection()
-    {
-        if (_selectedUnit != null)
-        {
-            _radiusDrawerComponent.HideRadius();
-            _selectedUnit = null;
-        }
-        _pathPreview.Hide();
-    }
-
     private void DeselectAll()
     {
-        foreach (var u in _selected) u.SetSelected(false);
+        foreach (var u in _selected)
+        {
+            u.SetSelected(false);
+        }
         _selected.Clear();
-        ClearSingleSelection();
+        _selectedUnit = null;
     }
 
     private void UpdateAttackRadiusDrawing()
     {
-        if (_selected.Count == 1 && _selected[0] != null)
+        if (_selectedUnit == null) return;
+
+        _radiusDrawerComponent.SetRadius(_selectedUnit.AttackRadius);
+        Vector3 drawPos = _selectedUnit.transform.position;
+
+        if (_selectedUnit.MovementRemaining.Value > 0 && TryGetGroundPointUnderMouse(out var ground))
         {
-            var unit = _selected[0];
-            _selectedUnit = unit;
-
-            _radiusDrawerComponent.SetRadius(unit.AttackRadius);
-
-            bool hasMovesLeft = unit.MovementRemaining.Value > 0;
-            Vector3 drawPos;
-
-            if (hasMovesLeft && TryGetGroundPointUnderMouse(out var ground))
-            {
-                drawPos = ground;
-            }
-            else
-            {
-                drawPos = unit.transform.position;
-            }
-
-            _radiusDrawerObject.transform.position = drawPos;
-            _radiusDrawerComponent.ShowRadius();
+            drawPos = ground;
         }
-        else
-        {
-            _radiusDrawerComponent.HideRadius();
-            _selectedUnit = null;
-        }
+        _radiusDrawerObject.transform.position = drawPos;
+        _radiusDrawerComponent.ShowRadius();
     }
 
     private void UpdatePathPreview()
     {
-        if (_selected.Count == 1 && _selected[0] != null && TryGetGroundPointUnderMouse(out var ground))
+        if (_selected.Count != 1)
         {
-            var unit = _selected[0];
-            Vector3 start = unit.transform.position;
-            Vector3 target = ground;
-            float maxReach = Mathf.Max(0f, unit.MovementRemaining.Value);
+            _pathPreview.Hide();
+            return;
+        }
 
-            _pathPreview.Draw(start, target, maxReach);
+        var selectedUnit = _selected[0];
+
+        if (TryGetGroundPointUnderMouse(out var ground))
+        {
+            selectedUnit.RequestPathPreviewServerRpc(ground);
         }
         else
         {
             _pathPreview.Hide();
+            selectedUnit.HidePathPreviewServerRpc();
         }
+    }
+
+    public void DrawPath(Vector3[] corners, float movementRemaining)
+    {
+        _pathPreview.Draw(corners, movementRemaining);
+    }
+
+    public void HidePath()
+    {
+        _pathPreview.Hide();
     }
 
     private bool TryGetGroundPointUnderMouse(out Vector3 point)
